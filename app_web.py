@@ -8,14 +8,37 @@ import math
 from collections import OrderedDict
 
 # --- CONFIGURAZIONE PAGINA WEB ---
-st.set_page_config(page_title="DACHSER 2D Packer", page_icon="🚛", layout="wide") 
+st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide") 
 
-# --- STILE GRAFICO UFFICIALE DACHSER (CSS) ---
+# --- STILE GRAFICO E FORZATURA TEMA CHIARO (CSS) ---
 st.markdown("""
     <style>
-    .stApp { background-color: #f4f5f7; }
+    /* Colori base della pagina */
+    .stApp { background-color: #f4f5f7; color: #333333; }
+    p, span, div { color: #333333; }
+    
+    /* Titoli generali della pagina in Blu Dachser */
     h1, h2, h3, h4 { color: #00386A !important; font-weight: 800; }
     
+    /* CLASSE SPECIFICA PER IL BANNER (Protegge il giallo) */
+    .dachser-banner {
+        background-color: #00386A !important;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 25px;
+        box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
+    }
+    .dachser-banner h1, .dachser-banner h3, .dachser-banner h4 {
+        color: #FFD100 !important;
+        margin: 0;
+    }
+    .dachser-banner h1 { font-size: 3rem; font-weight: 900; letter-spacing: 2px; }
+    .dachser-banner h3 { font-weight: 300; letter-spacing: 1px; }
+    .dachser-banner h4 { font-weight: 400; }
+    .dachser-banner hr { border-top: 1px solid #FFD100; width: 30%; margin: 15px auto; }
+    
+    /* Stile Bottoni */
     .stButton > button {
         background-color: white !important;
         color: #00386A !important;
@@ -51,6 +74,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- BANNER UFFICIALE DACHSER VICENZA ---
+st.markdown("""
+    <div style="background-color:#FFD100; padding:20px; border-radius:10px; text-align:center; margin-bottom:25px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1);">
+        <div style="color:#00386A !important; font-size: 3.5rem; font-weight: 900; letter-spacing: 2px; margin:0; line-height: 1.2;">DACHSER</div>
+        <div style="color:#00386A !important; font-size: 1.5rem; font-weight: 300; letter-spacing: 1px; margin:0; line-height: 1.2;">Intelligent Logistics</div>
+        <hr style="border-top: 2px solid #00386A; width: 30%; margin: 15px auto;">
+        <div style="color:#00386A !important; font-size: 1.1rem; font-weight: 400; margin:0;">Ottimizzatore Carico Pianale Multi-Drop &bull; <b style="color:#00386A !important;">Filiale di Vicenza</b></div>
+    </div>
+""", unsafe_allow_html=True)
+
 # --- INIZIALIZZAZIONE VARIABILI ---
 if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
@@ -61,10 +94,6 @@ if 'in_larg' not in st.session_state: st.session_state.in_larg = 80
 if 'in_alt' not in st.session_state: st.session_state.in_alt = 150
 if 'in_sovr' not in st.session_state: st.session_state.in_sovr = False
 if 'in_qta' not in st.session_state: st.session_state.in_qta = 1
-
-st.markdown("<h1 style='text-align: center;'>DACHSER Intelligent Logistics</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center;'>Ottimizzatore Carico Multi-Drop</h3>", unsafe_allow_html=True)
-st.markdown("---")
 
 # --- FUNZIONI DI SUPPORTO MANUALI ---
 def aggiungi_bancale():
@@ -104,7 +133,7 @@ col_sinistra, col_destra = st.columns([1.2, 1], gap="large")
 # PARTE SINISTRA: INPUT DATI E LISTA
 # ------------------------------------------
 with col_sinistra:
-    # 1. IMPORTAZIONE MASSIVA
+    # 1. IMPORTAZIONE MASSIVA (EXCEL/CSV)
     with st.expander("📂 IMPORTA MASSIVAMENTE DA FILE (Excel / CSV)"):
         st.markdown("""
         Crea un file Excel/CSV con questa intestazione:
@@ -214,6 +243,7 @@ with col_destra:
             rectangles_to_draw = []
 
             if not allow_rotation:
+                # MOTORE GRAVITAZIONALE CUSTOM (Logica Fisica Umana)
                 placed_rects = []
                 for g, l, w, h, s, q in st.session_state.lista_di_carico:
                     tiers = 1 if not s else max(1, altezza_camion // h) if h > 0 else 1
@@ -247,6 +277,7 @@ with col_destra:
                 max_lunghezza_occupata = max([r['y'] + r['h'] for r in placed_rects]) if placed_rects else 0
 
             else:
+                # MOTORE IA TETRIS (rectpack)
                 p = newPacker(rotation=True, sort_algo=SORT_NONE)
                 lunghezza_virtuale = 10000 
                 p.add_bin(larghezza_camion, lunghezza_virtuale)
@@ -277,11 +308,10 @@ with col_destra:
             else:
                 st.success(f"✅ **Ingombro Fisico:** {max_lunghezza_occupata/100:.2f} m")
 
-            # GRAFICA
+            # GRAFICA MATPLOTLIB
             lunghezza_disegno = max(lunghezza_camion, max_lunghezza_occupata + 100)
             ratio = lunghezza_disegno / larghezza_camion
             
-            # Ridimensionato il grafico a larghezza 2.5 per bilanciarlo con la colonna sinistra
             fig, ax = plt.subplots(figsize=(2.5, 2.5 * ratio))
             ax.set_xlim(0, larghezza_camion)
             ax.set_ylim(lunghezza_disegno, 0)
@@ -316,9 +346,9 @@ with col_destra:
 
             ax.axis('off')
             
-            # Usando st.pyplot centrerà o adatterà automaticamente l'immagine nella colonna di destra
             st.pyplot(fig)
             
+            # LEGENDA
             st.markdown("---")
             st.markdown("**LEGENDA CARICHI:**")
             for nome_g, colore in mappa_colori_gruppi.items():
