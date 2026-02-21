@@ -284,13 +284,14 @@ with col_destra:
             lunghezza_disegno = max(lunghezza_camion, max_lunghezza_occupata + 100)
             ratio = lunghezza_disegno / larghezza_camion
             
-            fig, ax = plt.subplots(figsize=(2.5, 2.5 * ratio))
+            # DIMENSIONI DIMEZZATE PER IL GRAFICO A VIDEO: da 2.5 a 1.2
+            fig, ax = plt.subplots(figsize=(1.2, 1.2 * ratio))
             ax.set_xlim(0, larghezza_camion)
             ax.set_ylim(lunghezza_disegno, 0)
             ax.set_aspect('equal')
             
             ax.add_patch(patches.Rectangle((0, 0), larghezza_camion, lunghezza_camion, fill=False, edgecolor='#00386A', lw=4))
-            ax.text(larghezza_camion/2, -30, "⬆ CABINA ⬆", ha='center', va='center', fontsize=10, fontweight='bold', color='#00386A')
+            ax.text(larghezza_camion/2, -30, "⬆ CABINA ⬆", ha='center', va='center', fontsize=8, fontweight='bold', color='#00386A')
 
             palette_colori = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#1abc9c', '#e74c3c']
             mappa_colori_gruppi = {}
@@ -308,22 +309,23 @@ with col_destra:
                     colore_bordo = "black"
 
                 ax.add_patch(patches.Rectangle((rect['x'], rect['y']), rect['w'], rect['h'], facecolor=colore_fill, edgecolor=colore_bordo, lw=2, alpha=0.9))
-                ax.text(rect['x'] + rect['w']/2, rect['y'] + rect['h']/2, rect['rid'], ha='center', va='center', fontsize=6, fontweight='bold', color='black')
+                # Testo ridotto a grandezza 4.5 per adattarsi ai bancali più piccoli
+                ax.text(rect['x'] + rect['w']/2, rect['y'] + rect['h']/2, rect['rid'], ha='center', va='center', fontsize=4.5, fontweight='bold', color='black')
 
             if max_lunghezza_occupata > lunghezza_camion:
                 ax.axhline(y=lunghezza_camion, color='red', linestyle='--', linewidth=3)
-                ax.text(larghezza_camion/2, lunghezza_camion - 20, "⛔ LIMITE (13.60m) ⛔", ha='center', va='center', color='red', fontweight='bold', fontsize=8)
+                ax.text(larghezza_camion/2, lunghezza_camion - 20, "⛔ LIMITE ⛔", ha='center', va='center', color='red', fontweight='bold', fontsize=7)
             else:
-                ax.text(larghezza_camion/2, lunghezza_camion + 40, "⬇ PORTELLONE ⬇", ha='center', va='center', fontsize=10, fontweight='bold', color='#00386A')
+                ax.text(larghezza_camion/2, lunghezza_camion + 40, "⬇ PORTELLONE ⬇", ha='center', va='center', fontsize=8, fontweight='bold', color='#00386A')
 
             legend_patches = []
             for nome_g, colore in mappa_colori_gruppi.items():
                 legend_patches.append(patches.Patch(color=colore, label=nome_g))
             
-            ax.legend(handles=legend_patches, loc='upper center', bbox_to_anchor=(0.5, -0.05), frameon=False, fontsize=8, ncol=1)
+            ax.legend(handles=legend_patches, loc='upper center', bbox_to_anchor=(0.5, -0.05), frameon=False, fontsize=6, ncol=1)
             ax.axis('off')
             
-            # --- 3. GENERAZIONE FILE PDF E BOTTONE (SPOSTATO IN ALTO) ---
+            # --- 3. GENERAZIONE FILE PDF E BOTTONE ---
             buf = io.BytesIO()
             fig.savefig(buf, format="pdf", bbox_inches="tight")
             buf.seek(0)
@@ -338,7 +340,10 @@ with col_destra:
             st.markdown("---")
 
             # --- 4. VISUALIZZAZIONE A SCHERMO ---
-            st.pyplot(fig)
+            # Stampa l'immagine centrandola nella colonna e dicendo a Streamlit di non allargarla forzatamente
+            col_spazio_sx, col_img, col_spazio_dx = st.columns([1, 2, 1])
+            with col_img:
+                st.pyplot(fig, use_container_width=False)
             
             # LEGENDA TESTUALE (per comodità a video)
             st.markdown("---")
