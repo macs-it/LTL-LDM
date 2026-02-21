@@ -167,7 +167,7 @@ with col_sinistra:
         st.write("") 
         st.checkbox("Sovrapponibile", key="in_sovr")
         
-    st.button("➕ AGGIUNGI BANCALE SINGOLO", on_click=aggiungi_bancale, use_container_width=True)
+    st.button("➕ AGGIUNGI", on_click=aggiungi_bancale, use_container_width=True)
     st.write("")
 
     if st.session_state.lista_di_carico:
@@ -284,7 +284,6 @@ with col_destra:
             lunghezza_disegno = max(lunghezza_camion, max_lunghezza_occupata + 100)
             ratio = lunghezza_disegno / larghezza_camion
             
-            # DIMENSIONI DIMEZZATE PER IL GRAFICO A VIDEO: da 2.5 a 1.2
             fig, ax = plt.subplots(figsize=(1.2, 1.2 * ratio))
             ax.set_xlim(0, larghezza_camion)
             ax.set_ylim(lunghezza_disegno, 0)
@@ -309,7 +308,6 @@ with col_destra:
                     colore_bordo = "black"
 
                 ax.add_patch(patches.Rectangle((rect['x'], rect['y']), rect['w'], rect['h'], facecolor=colore_fill, edgecolor=colore_bordo, lw=2, alpha=0.9))
-                # Testo ridotto a grandezza 4.5 per adattarsi ai bancali più piccoli
                 ax.text(rect['x'] + rect['w']/2, rect['y'] + rect['h']/2, rect['rid'], ha='center', va='center', fontsize=4.5, fontweight='bold', color='black')
 
             if max_lunghezza_occupata > lunghezza_camion:
@@ -340,7 +338,6 @@ with col_destra:
             st.markdown("---")
 
             # --- 4. VISUALIZZAZIONE A SCHERMO ---
-            # Stampa l'immagine centrandola nella colonna e dicendo a Streamlit di non allargarla forzatamente
             col_spazio_sx, col_img, col_spazio_dx = st.columns([1, 2, 1])
             with col_img:
                 st.pyplot(fig, use_container_width=False)
