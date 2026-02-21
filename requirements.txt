@@ -1,5 +1,6 @@
 streamlit
-rectpack
-matplotlib
 pandas
 openpyxl
+rectpack
+matplotlib
+reportlab
