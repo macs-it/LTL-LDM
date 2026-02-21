@@ -6,6 +6,7 @@ import matplotlib.patches as patches
 import random
 import math
 from collections import OrderedDict
+import io
 
 # --- CONFIGURAZIONE PAGINA WEB ---
 st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide") 
@@ -13,32 +14,10 @@ st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layo
 # --- STILE GRAFICO E FORZATURA TEMA CHIARO (CSS) ---
 st.markdown("""
     <style>
-    /* Colori base della pagina */
     .stApp { background-color: #f4f5f7; color: #333333; }
+    h1, h2, h3, h4 { color: #00386A !important; font-weight: 800; }
     p, span, div { color: #333333; }
     
-    /* Titoli generali della pagina in Blu Dachser */
-    h1, h2, h3, h4 { color: #00386A !important; font-weight: 800; }
-    
-    /* CLASSE SPECIFICA PER IL BANNER (Protegge il giallo) */
-    .dachser-banner {
-        background-color: #00386A !important;
-        padding: 20px;
-        border-radius: 10px;
-        text-align: center;
-        margin-bottom: 25px;
-        box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
-    }
-    .dachser-banner h1, .dachser-banner h3, .dachser-banner h4 {
-        color: #FFD100 !important;
-        margin: 0;
-    }
-    .dachser-banner h1 { font-size: 3rem; font-weight: 900; letter-spacing: 2px; }
-    .dachser-banner h3 { font-weight: 300; letter-spacing: 1px; }
-    .dachser-banner h4 { font-weight: 400; }
-    .dachser-banner hr { border-top: 1px solid #FFD100; width: 30%; margin: 15px auto; }
-    
-    /* Stile Bottoni */
     .stButton > button {
         background-color: white !important;
         color: #00386A !important;
@@ -69,12 +48,11 @@ st.markdown("""
         box-shadow: 0px 2px 5px rgba(0,0,0,0.05);
     }
     
-    /* Linea di separazione verticale virtuale */
     .css-1r6slb0 { border-right: 2px solid #e1e4e8; padding-right: 20px;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- BANNER UFFICIALE DACHSER VICENZA ---
+# --- BANNER UFFICIALE DACHSER VICENZA (GIALLO) ---
 st.markdown("""
     <div style="background-color:#FFD100; padding:20px; border-radius:10px; text-align:center; margin-bottom:25px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1);">
         <div style="color:#00386A !important; font-size: 3.5rem; font-weight: 900; letter-spacing: 2px; margin:0; line-height: 1.2;">DACHSER</div>
@@ -133,7 +111,6 @@ col_sinistra, col_destra = st.columns([1.2, 1], gap="large")
 # PARTE SINISTRA: INPUT DATI E LISTA
 # ------------------------------------------
 with col_sinistra:
-    # 1. IMPORTAZIONE MASSIVA (EXCEL/CSV)
     with st.expander("📂 IMPORTA MASSIVAMENTE DA FILE (Excel / CSV)"):
         st.markdown("""
         Crea un file Excel/CSV con questa intestazione:
@@ -171,7 +148,6 @@ with col_sinistra:
                 except Exception as e:
                     st.error(f"⛔ Errore durante la lettura: {e}")
 
-    # 2. INSERIMENTO MANUALE
     st.markdown("#### 📥 Inserimento Manuale")
     col_g, col_q = st.columns([3, 1])
     with col_g:
@@ -194,7 +170,6 @@ with col_sinistra:
     st.button("➕ AGGIUNGI BANCALE SINGOLO", on_click=aggiungi_bancale, use_container_width=True)
     st.write("")
 
-    # 3. LISTA BANCALI
     if st.session_state.lista_di_carico:
         st.markdown("#### 📦 Lista di carico in attesa:")
         for i, (g, l, w, h, s, q) in enumerate(st.session_state.lista_di_carico):
@@ -214,7 +189,6 @@ with col_sinistra:
 
     st.markdown("---")
     
-    # 4. BOTTONE DI CALCOLO
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (Usa IA Tetris)", value=False)
     st.caption("💡 **Nota:** Disattivata usa la simulazione gravitazionale riempiendo i buchi dei carichi precedenti in ordine cronologico.")
 
@@ -222,7 +196,7 @@ with col_sinistra:
 
 
 # ------------------------------------------
-# PARTE DESTRA: VISUALIZZAZIONE GRAFICA
+# PARTE DESTRA: VISUALIZZAZIONE GRAFICA E PDF
 # ------------------------------------------
 with col_destra:
     st.markdown("#### 📊 Risultato Ottimizzazione")
@@ -243,7 +217,6 @@ with col_destra:
             rectangles_to_draw = []
 
             if not allow_rotation:
-                # MOTORE GRAVITAZIONALE CUSTOM (Logica Fisica Umana)
                 placed_rects = []
                 for g, l, w, h, s, q in st.session_state.lista_di_carico:
                     tiers = 1 if not s else max(1, altezza_camion // h) if h > 0 else 1
@@ -277,7 +250,6 @@ with col_destra:
                 max_lunghezza_occupata = max([r['y'] + r['h'] for r in placed_rects]) if placed_rects else 0
 
             else:
-                # MOTORE IA TETRIS (rectpack)
                 p = newPacker(rotation=True, sort_algo=SORT_NONE)
                 lunghezza_virtuale = 10000 
                 p.add_bin(larghezza_camion, lunghezza_virtuale)
@@ -302,13 +274,13 @@ with col_destra:
                         })
                 max_lunghezza_occupata = max([r['y'] + r['h'] for r in rectangles_to_draw]) if rectangles_to_draw else 0
 
-            # RISULTATI TESTUALI
+            # --- 1. CALCOLO RISULTATI ---
             if max_lunghezza_occupata > lunghezza_camion:
                 st.error(f"⛔ **CARICO ECCESSIVO!** Occupi {max_lunghezza_occupata/100:.2f} m (+{(max_lunghezza_occupata - lunghezza_camion)/100:.2f} m di fuori sagoma)")
             else:
                 st.success(f"✅ **Ingombro Fisico:** {max_lunghezza_occupata/100:.2f} m")
 
-            # GRAFICA MATPLOTLIB
+            # --- 2. CREAZIONE DEL DISEGNO (Dietro le quinte) ---
             lunghezza_disegno = max(lunghezza_camion, max_lunghezza_occupata + 100)
             ratio = lunghezza_disegno / larghezza_camion
             
@@ -344,13 +316,33 @@ with col_destra:
             else:
                 ax.text(larghezza_camion/2, lunghezza_camion + 40, "⬇ PORTELLONE ⬇", ha='center', va='center', fontsize=10, fontweight='bold', color='#00386A')
 
+            legend_patches = []
+            for nome_g, colore in mappa_colori_gruppi.items():
+                legend_patches.append(patches.Patch(color=colore, label=nome_g))
+            
+            ax.legend(handles=legend_patches, loc='upper center', bbox_to_anchor=(0.5, -0.05), frameon=False, fontsize=8, ncol=1)
             ax.axis('off')
             
+            # --- 3. GENERAZIONE FILE PDF E BOTTONE (SPOSTATO IN ALTO) ---
+            buf = io.BytesIO()
+            fig.savefig(buf, format="pdf", bbox_inches="tight")
+            buf.seek(0)
+            
+            st.download_button(
+                label="📄 SCARICA PIANO DI CARICO (PDF)",
+                data=buf,
+                file_name="Piano_di_Carico_Dachser_Vicenza.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            st.markdown("---")
+
+            # --- 4. VISUALIZZAZIONE A SCHERMO ---
             st.pyplot(fig)
             
-            # LEGENDA
+            # LEGENDA TESTUALE (per comodità a video)
             st.markdown("---")
-            st.markdown("**LEGENDA CARICHI:**")
+            st.markdown("**LEGENDA CARICHI A VIDEO:**")
             for nome_g, colore in mappa_colori_gruppi.items():
                 st.markdown(f"<span style='color:{colore}; font-size: 16px;'>■</span> **{nome_g}**", unsafe_allow_html=True)
                 
