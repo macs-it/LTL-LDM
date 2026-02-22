@@ -1,11 +1,12 @@
-import streamlit as st
-from rectpack import newPacker, SORT_NONE
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import io
 import math
 from datetime import datetime
 from collections import OrderedDict
+
+import streamlit as st
+from rectpack import newPacker, SORT_NONE
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 # --- LIBRERIE REPORTLAB ---
 from reportlab.lib.pagesizes import A4
@@ -14,10 +15,14 @@ from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
 from reportlab.lib.utils import ImageReader
 
+# --- COSTANTI DI CONFIGURAZIONE ---
+CAMION_W = 240
+CAMION_L = 1360
+PALETTE = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#e74c3c', '#1abc9c', '#34495e', '#d35400', '#7f8c8d']
+
 # --- CONFIGURAZIONE PAGINA WEB ---
 st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide") 
 
-# --- STILE GRAFICO CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #f4f5f7; color: #333333; }
@@ -27,7 +32,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- BANNER GIALLO DACHSER ---
 st.markdown("""
     <div style="background-color:#FFD100; padding:20px; border-radius:10px; text-align:center; margin-bottom:25px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1);">
         <div style="color:#00386A !important; font-size: 3.5rem; font-weight: 900; letter-spacing: 2px; margin:0; line-height: 1.2;">DACHSER</div>
@@ -37,26 +41,19 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# --- INIZIALIZZAZIONE ---
+# --- GESTIONE STATO ---
 if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
 
 def get_next_scarico_name():
-    if not st.session_state.lista_di_carico:
-        return "SCARICO 1"
-    gruppi_esistenti = list(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico]))
-    return f"SCARICO {len(gruppi_esistenti) + 1}"
+    if not st.session_state.lista_di_carico: return "SCARICO 1"
+    return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
 
 if 'edit_g' not in st.session_state: st.session_state.edit_g = get_next_scarico_name()
-if 'edit_q' not in st.session_state: st.session_state.edit_q = 1
-if 'edit_l' not in st.session_state: st.session_state.edit_l = 120
-if 'edit_w' not in st.session_state: st.session_state.edit_w = 80
-if 'edit_h' not in st.session_state: st.session_state.edit_h = 150
-if 'edit_s' not in st.session_state: st.session_state.edit_s = False
+for val, default in [('edit_q', 1), ('edit_l', 120), ('edit_w', 80), ('edit_h', 150), ('edit_s', False)]:
+    if val not in st.session_state: st.session_state[val] = default
 
-PALETTE = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#e74c3c', '#1abc9c', '#34495e', '#d35400', '#7f8c8d']
-
-# --- FUNZIONI ---
+# --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
     st.session_state.lista_di_carico.append((st.session_state.val_g.upper(), st.session_state.val_l, st.session_state.val_w, st.session_state.val_h, st.session_state.val_s, st.session_state.val_q))
     st.session_state.edit_g = get_next_scarico_name()
@@ -69,32 +66,74 @@ def edita_riga(index):
     g, l, w, h, s, q = st.session_state.lista_di_carico.pop(index)
     st.session_state.edit_g, st.session_state.edit_l, st.session_state.edit_w, st.session_state.edit_h, st.session_state.edit_s, st.session_state.edit_q = g, l, w, h, s, q
 
-# --- FUNZIONE PDF ORIZZONTALE ---
+# --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
+def calcola_posizionamento(lista_di_carico, allow_rotation):
+    rects = []
+    
+    if not allow_rotation:
+        # Algoritmo "Gravità" per scarichi in ordine
+        for g, l, w, h, s, q in lista_di_carico:
+            tiers = max(1, 250 // h) if s else 1
+            pezzi_rimanenti = q
+            
+            for _ in range(math.ceil(q / tiers)):
+                pezzi_qui = min(pezzi_rimanenti, tiers)
+                label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
+                pezzi_rimanenti -= pezzi_qui
+                
+                best_y = float('inf'); best_x = 0
+                xs = sorted(list(set([0] + [r['x'] + r['w'] for r in rects if r['x'] + r['w'] + w <= CAMION_W])))
+                for x in xs:
+                    max_y = 0
+                    for r in rects:
+                        if x < r['x'] + r['w'] and x + w > r['x']: 
+                            max_y = max(max_y, r['y'] + r['h'])
+                    if max_y < best_y: best_y, best_x = max_y, x
+                rects.append({'x': best_x, 'y': best_y, 'w': w, 'h': l, 'rid': label, 'gruppo': g})
+    else:
+        # Algoritmo IA Rotazione Libera (Rectpack)
+        p = newPacker(rotation=True, sort_algo=SORT_NONE)
+        p.add_bin(CAMION_W, 10000)
+        for g, l, w, h, s, q in lista_di_carico:
+            tiers = max(1, 250 // h) if s else 1
+            pezzi_rimanenti = q
+            for _ in range(math.ceil(q / tiers)):
+                pezzi_qui = min(pezzi_rimanenti, tiers)
+                label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
+                pezzi_rimanenti -= pezzi_qui
+                p.add_rect(w, l, rid=f"{g}###{label}")
+        p.pack()
+        for b in p:
+            for r in b:
+                g_e, l_e = str(r.rid).split("###")
+                rects.append({'x': r.x, 'y': r.y, 'w': r.width, 'h': r.height, 'rid': l_e, 'gruppo': g_e})
+
+    max_L = max([r['y'] + r['h'] for r in rects]) if rects else 0
+    return rects, max_L
+
+# --- FUNZIONE GENERAZIONE PDF ---
 def genera_pdf_reportlab(rects, lista_carico, ingombro):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
     
+    # Intestazione e Info
     c.setFillColorRGB(0, 0.22, 0.41) 
     c.rect(0, height - 85, width, 85, fill=1)
-    c.setFillColor(colors.yellow)
-    c.setFont("Helvetica-Bold", 26)
+    c.setFillColor(colors.yellow); c.setFont("Helvetica-Bold", 26)
     c.drawString(45, height - 45, "DACHSER")
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica", 12)
+    c.setFillColor(colors.white); c.setFont("Helvetica", 12)
     c.drawString(45, height - 70, "REPORT DI CARICO - Filiale di Vicenza")
     
-    c.setFillColor(colors.black)
-    data_str = datetime.now().strftime("%d/%m/%Y %H:%M")
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(400, height - 110, f"Data: {data_str}")
+    c.setFillColor(colors.black); c.setFont("Helvetica-Bold", 10)
+    c.drawString(400, height - 110, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m")
 
+    # Grafico Camion
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4)) 
     ax_pdf.set_aspect('equal')
-    ax_pdf.set_xlim(-50, 1400)
-    ax_pdf.set_ylim(-20, 260)
-    ax_pdf.add_patch(patches.Rectangle((0, 0), 1360, 240, fill=False, edgecolor='#00386A', lw=2))
+    ax_pdf.set_xlim(-50, 1400); ax_pdf.set_ylim(-20, 260)
+    ax_pdf.add_patch(patches.Rectangle((0, 0), CAMION_L, CAMION_W, fill=False, edgecolor='#00386A', lw=2))
     ax_pdf.text(-30, 120, "CABINA", ha='center', va='center', fontweight='bold', color='#00386A', rotation=90)
     
     gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects]))
@@ -109,15 +148,13 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     fig_pdf.savefig(img_buffer, format='png', bbox_inches='tight', dpi=180)
     plt.close(fig_pdf)
     img_buffer.seek(0)
-    
-    img_reader = ImageReader(img_buffer)
-    c.drawImage(img_reader, 30, 400, width=535, preserveAspectRatio=True)
+    c.drawImage(ImageReader(img_buffer), 30, 400, width=535, preserveAspectRatio=True)
 
+    # Tabella
     c.setFont("Helvetica-Bold", 13)
     c.drawString(45, 360, "ELENCO MERCI CARICATE:")
     table_data = [["Destinazione", "Dim. (cm)", "Q.tà", "Sovr."]]
-    for g, l, w, h, s, q in lista_carico:
-        table_data.append([g, f"{l}x{w}x{h}", str(q), "Sì" if s else "No"])
+    for g, l, w, h, s, q in lista_carico: table_data.append([g, f"{l}x{w}x{h}", str(q), "Sì" if s else "No"])
     
     t = Table(table_data, colWidths=[180, 110, 60, 60])
     t.setStyle(TableStyle([
@@ -130,61 +167,47 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     t.wrapOn(c, width, height)
     t.drawOn(c, 45, 340 - (len(table_data) * 20))
 
-    c.showPage()
-    c.save()
-    buf.seek(0)
+    c.showPage(); c.save(); buf.seek(0)
     return buf
 
-# --- UI STREAMLIT ---
+# ==========================================
+# --- LAYOUT E INTERFACCIA UTENTE ---
+# ==========================================
+
 col_sx, col_dx = st.columns([1.2, 1], gap="large")
 
 with col_sx:
     st.markdown("#### 📥 Inserimento Merci")
     
-    # RIGA 1: Solo Destinazione
     st.text_input("📍 Destinazione (Scarico)", key="val_g", value=st.session_state.edit_g)
     
-    # RIGA 2: Quantità + Tutte le dimensioni fisiche
     c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
     with c1: st.number_input("📦 Q.tà", min_value=1, key="val_q", value=st.session_state.edit_q, step=1)
     with c2: st.number_input("L (cm)", key="val_l", value=st.session_state.edit_l, step=10)
     with c3: st.number_input("W (cm)", key="val_w", value=st.session_state.edit_w, step=10)
     with c4: st.number_input("H (cm)", key="val_h", value=st.session_state.edit_h, step=10)
-    with c5: 
-        st.write("") 
-        st.checkbox("Sovr.", key="val_s", value=st.session_state.edit_s)
+    with c5: st.write(""); st.checkbox("Sovr.", key="val_s", value=st.session_state.edit_s)
     
     st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
 
     if st.session_state.lista_di_carico:
         st.markdown("---")
         
-        # --- RAGGRUPPAMENTO VISIVO DEGLI SCARICHI ---
         gruppi_vista = OrderedDict()
         for i, item in enumerate(st.session_state.lista_di_carico):
-            g = item[0]
-            if g not in gruppi_vista:
-                gruppi_vista[g] = []
-            gruppi_vista[g].append((i, item))
+            gruppi_vista.setdefault(item[0], []).append((i, item))
             
         for g, items_gruppo in gruppi_vista.items():
-            # Intestazione del Gruppo (Destinazione)
             st.markdown(f"<h6 style='color:#00386A; margin-top: 15px; margin-bottom: 5px; font-weight:bold;'>📍 {g}</h6>", unsafe_allow_html=True)
-            
-            # Elementi del gruppo
             for i, item in items_gruppo:
                 _, l, w, h, s, q = item
                 cs1, cs2, cs3 = st.columns([8, 1, 1])
-                with cs1: 
-                    sovra_text = "Sì" if s else "No"
-                    # Qui non stampo più il nome del gruppo, solo i dettagli merce
-                    st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {sovra_text}")
+                with cs1: st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}")
                 with cs2: st.button("✏️", key=f"ed_{i}", on_click=edita_riga, args=(i,))
                 with cs3: st.button("❌", key=f"del_{i}", on_click=elimina_riga, args=(i,))
         
         if len(st.session_state.lista_di_carico) > 11:
-            st.warning("⚠️ Hai inserito molti lotti. La tabella nel PDF potrebbe essere tagliata a fondo pagina.")
-            
+            st.warning("⚠️ Hai inserito molti lotti. La tabella nel PDF potrebbe essere tagliata.")
         if st.button("🗑️ Svuota Tutto"): st.session_state.lista_di_carico.clear(); st.rerun()
 
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=False)
@@ -193,61 +216,21 @@ with col_sx:
 with col_dx:
     st.markdown("#### 📊 Risultato")
     if esegui and st.session_state.lista_di_carico:
-        larghezza_camion = 240
-        lunghezza_camion = 1360
-        rects_to_draw = []
+        
+        # 1. Chiamata al cervello matematico
+        rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
 
-        if not allow_rotation:
-            placed = []
-            for g, l, w, h, s, q in st.session_state.lista_di_carico:
-                tiers = max(1, 250 // h) if s else 1
-                spots = math.ceil(q / tiers)
-                pezzi_rimanenti = q
-                
-                for _ in range(spots):
-                    pezzi_qui = min(pezzi_rimanenti, tiers)
-                    label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
-                    pezzi_rimanenti -= pezzi_qui
-                    
-                    best_y = float('inf'); best_x = 0
-                    xs = sorted(list(set([0] + [r['x'] + r['w'] for r in placed if r['x'] + r['w'] + w <= larghezza_camion])))
-                    for x in xs:
-                        max_y = 0
-                        for r in placed:
-                            if x < r['x'] + r['w'] and x + w > r['x']: max_y = max(max_y, r['y'] + r['h'])
-                        if max_y < best_y: best_y = max_y; best_x = x
-                    placed.append({'x': best_x, 'y': best_y, 'w': w, 'h': l, 'rid': label, 'gruppo': g})
-            rects_to_draw = placed
-        else:
-            p = newPacker(rotation=True, sort_algo=SORT_NONE)
-            p.add_bin(larghezza_camion, 10000)
-            for g, l, w, h, s, q in st.session_state.lista_di_carico:
-                tiers = max(1, 250 // h) if s else 1
-                spots = math.ceil(q / tiers)
-                pezzi_rimanenti = q
-                
-                for _ in range(spots):
-                    pezzi_qui = min(pezzi_rimanenti, tiers)
-                    label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
-                    pezzi_rimanenti -= pezzi_qui
-                    p.add_rect(w, l, rid=f"{g}###{label}")
-            p.pack()
-            for b in p:
-                for r in b:
-                    g_e, l_e = str(r.rid).split("###")
-                    rects_to_draw.append({'x': r.x, 'y': r.y, 'w': r.width, 'h': r.height, 'rid': l_e, 'gruppo': g_e})
+        # 2. Messaggio di stato
+        if max_L > CAMION_L: st.error(f"⛔ Eccesso: {max_L/100:.2f} m (Limite {CAMION_L/100}m)")
+        else: st.success(f"✅ Ingombro Totale: {max_L/100:.2f} m")
 
-        max_L = max([r['y'] + r['h'] for r in rects_to_draw]) if rects_to_draw else 0
-        if max_L > lunghezza_camion: st.error(f"Eccesso: {max_L/100:.2f} m")
-        else: st.success(f"Ingombro: {max_L/100:.2f} m")
-
-        # ANTEPRIMA VERTICALE A VIDEO
-        total_h = max(lunghezza_camion, max_L + 50) + 50
-        fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / larghezza_camion)))
+        # 3. Disegno Anteprima Verticale
+        total_h = max(CAMION_L, max_L + 50) + 50
+        fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / CAMION_W)))
         ax_s.set_aspect('equal')
-        ax_s.set_xlim(0, 240); ax_s.set_ylim(total_h, -50)
-        ax_s.add_patch(patches.Rectangle((0, 0), 240, lunghezza_camion, fill=False, edgecolor='#00386A', lw=2))
-        ax_s.text(120, -25, "CABINA", ha='center', fontweight='bold', color='#00386A', fontsize=5)
+        ax_s.set_xlim(0, CAMION_W); ax_s.set_ylim(total_h, -50)
+        ax_s.add_patch(patches.Rectangle((0, 0), CAMION_W, CAMION_L, fill=False, edgecolor='#00386A', lw=2))
+        ax_s.text(CAMION_W/2, -25, "CABINA", ha='center', fontweight='bold', color='#00386A', fontsize=5)
         
         gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects_to_draw]))
         mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
@@ -256,6 +239,7 @@ with col_dx:
             ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
         ax_s.axis('off')
 
+        # 4. Bottone PDF
         st.download_button(
             label="📄 SCARICA REPORT PDF",
             data=lambda: genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L),
@@ -267,5 +251,6 @@ with col_dx:
         st.markdown("---")
         _, col_m, _ = st.columns([1.5, 2, 1.5])
         with col_m: st.pyplot(fig_s, use_container_width=True)
+        
     elif not st.session_state.lista_di_carico:
-        st.info("💡 Aggiungi bancali per iniziare l'ottimizzazione.")
+        st.info("💡 Aggiungi i bancali a sinistra per visualizzare il piano di carico.")
