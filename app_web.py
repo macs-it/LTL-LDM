@@ -239,10 +239,11 @@ with col_dx:
             ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
         ax_s.axis('off')
 
-        # 4. Bottone PDF
+     # 4. Bottone PDF (Corretto)
+        pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L)
         st.download_button(
             label="📄 SCARICA REPORT PDF",
-            data=lambda: genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L),
+            data=pdf_file,
             file_name="Report_Carico_Vicenza.pdf",
             mime="application/pdf",
             use_container_width=True
