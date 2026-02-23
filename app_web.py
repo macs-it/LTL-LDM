@@ -70,9 +70,23 @@ def edita_riga(index):
 def calcola_posizionamento(lista_di_carico, allow_rotation):
     rects = []
     
+    # 1. RAGGRUPPAMENTO INTELLIGENTE PER DESTINAZIONE
+    # Accorpa tutti i bancali dello stesso gruppo, anche se inseriti in momenti diversi
+    gruppi_ordinati = OrderedDict()
+    for item in lista_di_carico:
+        g = item[0] # È il nome della destinazione (es. SCARICO 1)
+        if g not in gruppi_ordinati:
+            gruppi_ordinati[g] = []
+        gruppi_ordinati[g].append(item)
+        
+    lista_raggruppata = []
+    for g in gruppi_ordinati:
+        lista_raggruppata.extend(gruppi_ordinati[g])
+
+    # 2. CALCOLO DEGLI SPAZI SULLA LISTA RAGGRUPPATA
     if not allow_rotation:
         # Algoritmo "Gravità" per scarichi in ordine
-        for g, l, w, h, s, q in lista_di_carico:
+        for g, l, w, h, s, q in lista_raggruppata:
             tiers = max(1, 250 // h) if s else 1
             pezzi_rimanenti = q
             
@@ -94,7 +108,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
         # Algoritmo IA Rotazione Libera (Rectpack)
         p = newPacker(rotation=True, sort_algo=SORT_NONE)
         p.add_bin(CAMION_W, 10000)
-        for g, l, w, h, s, q in lista_di_carico:
+        for g, l, w, h, s, q in lista_raggruppata:
             tiers = max(1, 250 // h) if s else 1
             pezzi_rimanenti = q
             for _ in range(math.ceil(q / tiers)):
@@ -110,7 +124,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
 
     max_L = max([r['y'] + r['h'] for r in rects]) if rects else 0
     return rects, max_L
-
+    
 # --- FUNZIONE GENERAZIONE PDF ---
 def genera_pdf_reportlab(rects, lista_carico, ingombro):
     buf = io.BytesIO()
