@@ -49,32 +49,38 @@ def get_next_scarico_name():
     if not st.session_state.lista_di_carico: return "SCARICO 1"
     return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
 
-if 'edit_g' not in st.session_state: st.session_state.edit_g = get_next_scarico_name()
-for val, default in [('edit_q', 1), ('edit_l', 120), ('edit_w', 80), ('edit_h', 150), ('edit_s', False)]:
+# Inizializziamo direttamente le variabili legate ai campi di input (val_*)
+if 'val_g' not in st.session_state: st.session_state.val_g = get_next_scarico_name()
+for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
     if val not in st.session_state: st.session_state[val] = default
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
     st.session_state.lista_di_carico.append((st.session_state.val_g.upper(), st.session_state.val_l, st.session_state.val_w, st.session_state.val_h, st.session_state.val_s, st.session_state.val_q))
-    st.session_state.edit_g = get_next_scarico_name()
+    st.session_state.val_g = get_next_scarico_name() # Resetta al prossimo scarico
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
-    st.session_state.edit_g = get_next_scarico_name()
+    st.session_state.val_g = get_next_scarico_name()
 
 def edita_riga(index):
+    # Rimuove l'elemento dalla lista e inietta i suoi valori direttamente nei campi di input
     g, l, w, h, s, q = st.session_state.lista_di_carico.pop(index)
-    st.session_state.edit_g, st.session_state.edit_l, st.session_state.edit_w, st.session_state.edit_h, st.session_state.edit_s, st.session_state.edit_q = g, l, w, h, s, q
+    st.session_state.val_g = g
+    st.session_state.val_l = l
+    st.session_state.val_w = w
+    st.session_state.val_h = h
+    st.session_state.val_s = s
+    st.session_state.val_q = q
 
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
 def calcola_posizionamento(lista_di_carico, allow_rotation):
     rects = []
     
     # 1. RAGGRUPPAMENTO INTELLIGENTE PER DESTINAZIONE
-    # Accorpa tutti i bancali dello stesso gruppo, anche se inseriti in momenti diversi
     gruppi_ordinati = OrderedDict()
     for item in lista_di_carico:
-        g = item[0] # È il nome della destinazione (es. SCARICO 1)
+        g = item[0] 
         if g not in gruppi_ordinati:
             gruppi_ordinati[g] = []
         gruppi_ordinati[g].append(item)
@@ -83,9 +89,8 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
     for g in gruppi_ordinati:
         lista_raggruppata.extend(gruppi_ordinati[g])
 
-    # 2. CALCOLO DEGLI SPAZI SULLA LISTA RAGGRUPPATA
+    # 2. CALCOLO DEGLI SPAZI
     if not allow_rotation:
-        # Algoritmo "Gravità" per scarichi in ordine
         for g, l, w, h, s, q in lista_raggruppata:
             tiers = max(1, 250 // h) if s else 1
             pezzi_rimanenti = q
@@ -105,7 +110,6 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
                     if max_y < best_y: best_y, best_x = max_y, x
                 rects.append({'x': best_x, 'y': best_y, 'w': w, 'h': l, 'rid': label, 'gruppo': g})
     else:
-        # Algoritmo IA Rotazione Libera (Rectpack)
         p = newPacker(rotation=True, sort_algo=SORT_NONE)
         p.add_bin(CAMION_W, 10000)
         for g, l, w, h, s, q in lista_raggruppata:
@@ -124,14 +128,13 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
 
     max_L = max([r['y'] + r['h'] for r in rects]) if rects else 0
     return rects, max_L
-    
+
 # --- FUNZIONE GENERAZIONE PDF ---
 def genera_pdf_reportlab(rects, lista_carico, ingombro):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
     
-    # Intestazione e Info
     c.setFillColorRGB(0, 0.22, 0.41) 
     c.rect(0, height - 85, width, 85, fill=1)
     c.setFillColor(colors.yellow); c.setFont("Helvetica-Bold", 26)
@@ -143,7 +146,6 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.drawString(400, height - 110, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m")
 
-    # Grafico Camion
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4)) 
     ax_pdf.set_aspect('equal')
     ax_pdf.set_xlim(-50, 1400); ax_pdf.set_ylim(-20, 260)
@@ -164,7 +166,6 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     img_buffer.seek(0)
     c.drawImage(ImageReader(img_buffer), 30, 400, width=535, preserveAspectRatio=True)
 
-    # Tabella
     c.setFont("Helvetica-Bold", 13)
     c.drawString(45, 360, "ELENCO MERCI CARICATE:")
     table_data = [["Destinazione", "Dim. (cm)", "Q.tà", "Sovr."]]
@@ -193,14 +194,15 @@ col_sx, col_dx = st.columns([1.2, 1], gap="large")
 with col_sx:
     st.markdown("#### 📥 Inserimento Merci")
     
-    st.text_input("📍 Destinazione (Scarico)", key="val_g", value=st.session_state.edit_g)
+    # I campi input ora usano SOLO la "key", pescando i valori in automatico dallo state
+    st.text_input("📍 Destinazione (Scarico)", key="val_g")
     
     c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
-    with c1: st.number_input("📦 Q.tà", min_value=1, key="val_q", value=st.session_state.edit_q, step=1)
-    with c2: st.number_input("L (cm)", key="val_l", value=st.session_state.edit_l, step=10)
-    with c3: st.number_input("W (cm)", key="val_w", value=st.session_state.edit_w, step=10)
-    with c4: st.number_input("H (cm)", key="val_h", value=st.session_state.edit_h, step=10)
-    with c5: st.write(""); st.checkbox("Sovr.", key="val_s", value=st.session_state.edit_s)
+    with c1: st.number_input("📦 Q.tà", min_value=1, key="val_q", step=1)
+    with c2: st.number_input("L (cm)", key="val_l", step=10)
+    with c3: st.number_input("W (cm)", key="val_w", step=10)
+    with c4: st.number_input("H (cm)", key="val_h", step=10)
+    with c5: st.write(""); st.checkbox("Sovr.", key="val_s")
     
     st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
 
@@ -222,7 +224,11 @@ with col_sx:
         
         if len(st.session_state.lista_di_carico) > 11:
             st.warning("⚠️ Hai inserito molti lotti. La tabella nel PDF potrebbe essere tagliata.")
-        if st.button("🗑️ Svuota Tutto"): st.session_state.lista_di_carico.clear(); st.rerun()
+            
+        if st.button("🗑️ Svuota Tutto"): 
+            st.session_state.lista_di_carico.clear()
+            st.session_state.val_g = get_next_scarico_name()
+            st.rerun()
 
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=False)
     esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", use_container_width=True)
@@ -231,14 +237,11 @@ with col_dx:
     st.markdown("#### 📊 Risultato")
     if esegui and st.session_state.lista_di_carico:
         
-        # 1. Chiamata al cervello matematico
         rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
 
-        # 2. Messaggio di stato
         if max_L > CAMION_L: st.error(f"⛔ Eccesso: {max_L/100:.2f} m (Limite {CAMION_L/100}m)")
         else: st.success(f"✅ Ingombro Totale: {max_L/100:.2f} m")
 
-        # 3. Disegno Anteprima Verticale
         total_h = max(CAMION_L, max_L + 50) + 50
         fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / CAMION_W)))
         ax_s.set_aspect('equal')
@@ -253,7 +256,6 @@ with col_dx:
             ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
         ax_s.axis('off')
 
-     # 4. Bottone PDF (Corretto)
         pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L)
         st.download_button(
             label="📄 SCARICA REPORT PDF",
