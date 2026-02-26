@@ -4,6 +4,7 @@ from datetime import datetime
 from collections import OrderedDict
 
 import streamlit as st
+import pandas as pd  # <--- REINSERITO PER LEGGERE EXCEL/CSV
 from rectpack import newPacker, SORT_NONE
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -45,7 +46,6 @@ st.markdown("""
 if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
 
-# Inizializziamo direttamente le variabili collegate ai campi
 if 'val_g' not in st.session_state: st.session_state.val_g = "SCARICO 1"
 for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
     if val not in st.session_state: st.session_state[val] = default
@@ -53,7 +53,6 @@ for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150)
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
     st.session_state.lista_di_carico.append((st.session_state.val_g.upper(), st.session_state.val_l, st.session_state.val_w, st.session_state.val_h, st.session_state.val_s, st.session_state.val_q))
-    # Ho rimosso il reset automatico: la destinazione rimane quella appena digitata!
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
@@ -67,11 +66,10 @@ def edita_riga(index):
     st.session_state.val_s = s
     st.session_state.val_q = q
 
-# --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
+# --- FUNZIONE LOGICA DI CALCOLO ---
 def calcola_posizionamento(lista_di_carico, allow_rotation):
     rects = []
     
-    # Raggruppa i bancali della stessa destinazione, anche se inseriti in momenti diversi
     gruppi_ordinati = OrderedDict()
     for item in lista_di_carico:
         g = item[0]
@@ -182,7 +180,39 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
 col_sx, col_dx = st.columns([1.2, 1], gap="large")
 
 with col_sx:
-    st.markdown("#### 📥 Inserimento Merci")
+    # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
+    with st.expander("📁 Importa lista da Excel o CSV"):
+        st.markdown("<small>Il file deve contenere le colonne: <b>Destinazione, Qta, L, W, H, Sovr</b></small>", unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
+        
+        if uploaded_file is not None:
+            if st.button("📥 CARICA DATI", use_container_width=True):
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_file)
+                    else:
+                        df = pd.read_excel(uploaded_file)
+                    
+                    for index, row in df.iterrows():
+                        # Fallback sicuri se mancano colonne o ci sono celle vuote
+                        g = str(row.get('Destinazione', f'SCARICO {index+1}')).strip().upper()
+                        q = int(row.get('Qta', 1))
+                        l = int(row.get('L', 120))
+                        w = int(row.get('W', 80))
+                        h = int(row.get('H', 150))
+                        
+                        # Interpretazione booleana per la sovrapponibilità
+                        s_raw = str(row.get('Sovr', 'no')).strip().lower()
+                        s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
+                        
+                        st.session_state.lista_di_carico.append((g, l, w, h, s, q))
+                    
+                    st.success("Dati importati con successo!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Errore nella lettura del file: controlla che le colonne siano corrette. Dettaglio: {e}")
+
+    st.markdown("#### 📥 Inserimento Manuale")
     
     st.text_input("📍 Destinazione (Scarico)", key="val_g")
     
@@ -259,4 +289,4 @@ with col_dx:
         with col_m: st.pyplot(fig_s, use_container_width=True)
         
     elif not st.session_state.lista_di_carico:
-        st.info("💡 Aggiungi i bancali a sinistra per visualizzare il piano di carico.")
+        st.info("💡 Aggiungi i bancali a sinistra o importa un file per visualizzare il piano di carico.")
