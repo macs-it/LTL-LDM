@@ -4,7 +4,7 @@ from datetime import datetime
 from collections import OrderedDict
 
 import streamlit as st
-import pandas as pd  # <--- REINSERITO PER LEGGERE EXCEL/CSV
+import pandas as pd
 from rectpack import newPacker, SORT_NONE
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -182,7 +182,11 @@ col_sx, col_dx = st.columns([1.2, 1], gap="large")
 with col_sx:
     # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
     with st.expander("📁 Importa lista da Excel o CSV"):
-        st.markdown("<small>Il file deve contenere le colonne: <b>Destinazione, Qta, L, W, H, Sovr</b></small>", unsafe_allow_html=True)
+        st.markdown("""
+        <small>Il file deve contenere le colonne: <b>Destinazione, Qta, L, W, H, Sovr</b><br><br>
+        💡 <b>Sovr:</b> Indica se il bancale è sovrapponibile (regge altra merce sopra).<br>
+        <i>Scrivere 'si' o '1' se lo è, altrimenti 'no' o '0'.</i></small>
+        """, unsafe_allow_html=True)
         uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
         
         if uploaded_file is not None:
@@ -194,14 +198,12 @@ with col_sx:
                         df = pd.read_excel(uploaded_file)
                     
                     for index, row in df.iterrows():
-                        # Fallback sicuri se mancano colonne o ci sono celle vuote
                         g = str(row.get('Destinazione', f'SCARICO {index+1}')).strip().upper()
                         q = int(row.get('Qta', 1))
                         l = int(row.get('L', 120))
                         w = int(row.get('W', 80))
                         h = int(row.get('H', 150))
                         
-                        # Interpretazione booleana per la sovrapponibilità
                         s_raw = str(row.get('Sovr', 'no')).strip().lower()
                         s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
                         
@@ -221,7 +223,9 @@ with col_sx:
     with c2: st.number_input("L (cm)", min_value=1, key="val_l", step=10)
     with c3: st.number_input("W (cm)", min_value=1, key="val_w", step=10)
     with c4: st.number_input("H (cm)", min_value=1, key="val_h", step=10)
-    with c5: st.write(""); st.checkbox("Sovr.", key="val_s")
+    with c5: 
+        st.write("")
+        st.checkbox("Sovr.", key="val_s")
     
     st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
 
