@@ -49,7 +49,7 @@ def get_next_scarico_name():
     if not st.session_state.lista_di_carico: return "SCARICO 1"
     return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
 
-# Inizializziamo direttamente le variabili legate ai campi di input (val_*)
+# Inizializziamo direttamente le variabili collegate ai campi
 if 'val_g' not in st.session_state: st.session_state.val_g = get_next_scarico_name()
 for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
     if val not in st.session_state: st.session_state[val] = default
@@ -57,14 +57,13 @@ for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150)
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
     st.session_state.lista_di_carico.append((st.session_state.val_g.upper(), st.session_state.val_l, st.session_state.val_w, st.session_state.val_h, st.session_state.val_s, st.session_state.val_q))
-    st.session_state.val_g = get_next_scarico_name() # Resetta al prossimo scarico
+    st.session_state.val_g = get_next_scarico_name()
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
     st.session_state.val_g = get_next_scarico_name()
 
 def edita_riga(index):
-    # Rimuove l'elemento dalla lista e inietta i suoi valori direttamente nei campi di input
     g, l, w, h, s, q = st.session_state.lista_di_carico.pop(index)
     st.session_state.val_g = g
     st.session_state.val_l = l
@@ -77,24 +76,21 @@ def edita_riga(index):
 def calcola_posizionamento(lista_di_carico, allow_rotation):
     rects = []
     
-    # 1. RAGGRUPPAMENTO INTELLIGENTE PER DESTINAZIONE
+    # Raggruppa i bancali della stessa destinazione, anche se inseriti in momenti diversi
     gruppi_ordinati = OrderedDict()
     for item in lista_di_carico:
-        g = item[0] 
-        if g not in gruppi_ordinati:
-            gruppi_ordinati[g] = []
+        g = item[0]
+        if g not in gruppi_ordinati: gruppi_ordinati[g] = []
         gruppi_ordinati[g].append(item)
         
     lista_raggruppata = []
     for g in gruppi_ordinati:
         lista_raggruppata.extend(gruppi_ordinati[g])
 
-    # 2. CALCOLO DEGLI SPAZI
     if not allow_rotation:
         for g, l, w, h, s, q in lista_raggruppata:
             tiers = max(1, 250 // h) if s else 1
             pezzi_rimanenti = q
-            
             for _ in range(math.ceil(q / tiers)):
                 pezzi_qui = min(pezzi_rimanenti, tiers)
                 label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
@@ -105,8 +101,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
                 for x in xs:
                     max_y = 0
                     for r in rects:
-                        if x < r['x'] + r['w'] and x + w > r['x']: 
-                            max_y = max(max_y, r['y'] + r['h'])
+                        if x < r['x'] + r['w'] and x + w > r['x']: max_y = max(max_y, r['y'] + r['h'])
                     if max_y < best_y: best_y, best_x = max_y, x
                 rects.append({'x': best_x, 'y': best_y, 'w': w, 'h': l, 'rid': label, 'gruppo': g})
     else:
@@ -194,14 +189,13 @@ col_sx, col_dx = st.columns([1.2, 1], gap="large")
 with col_sx:
     st.markdown("#### 📥 Inserimento Merci")
     
-    # I campi input ora usano SOLO la "key", pescando i valori in automatico dallo state
     st.text_input("📍 Destinazione (Scarico)", key="val_g")
     
     c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
     with c1: st.number_input("📦 Q.tà", min_value=1, key="val_q", step=1)
-    with c2: st.number_input("L (cm)", key="val_l", step=10)
-    with c3: st.number_input("W (cm)", key="val_w", step=10)
-    with c4: st.number_input("H (cm)", key="val_h", step=10)
+    with c2: st.number_input("L (cm)", min_value=1, key="val_l", step=10)
+    with c3: st.number_input("W (cm)", min_value=1, key="val_w", step=10)
+    with c4: st.number_input("H (cm)", min_value=1, key="val_h", step=10)
     with c5: st.write(""); st.checkbox("Sovr.", key="val_s")
     
     st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
