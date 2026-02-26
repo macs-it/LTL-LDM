@@ -45,23 +45,18 @@ st.markdown("""
 if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
 
-def get_next_scarico_name():
-    if not st.session_state.lista_di_carico: return "SCARICO 1"
-    return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
-
 # Inizializziamo direttamente le variabili collegate ai campi
-if 'val_g' not in st.session_state: st.session_state.val_g = get_next_scarico_name()
+if 'val_g' not in st.session_state: st.session_state.val_g = "SCARICO 1"
 for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
     if val not in st.session_state: st.session_state[val] = default
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
     st.session_state.lista_di_carico.append((st.session_state.val_g.upper(), st.session_state.val_l, st.session_state.val_w, st.session_state.val_h, st.session_state.val_s, st.session_state.val_q))
-    st.session_state.val_g = get_next_scarico_name()
+    # Ho rimosso il reset automatico: la destinazione rimane quella appena digitata!
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
-    st.session_state.val_g = get_next_scarico_name()
 
 def edita_riga(index):
     g, l, w, h, s, q = st.session_state.lista_di_carico.pop(index)
@@ -221,7 +216,7 @@ with col_sx:
             
         if st.button("🗑️ Svuota Tutto"): 
             st.session_state.lista_di_carico.clear()
-            st.session_state.val_g = get_next_scarico_name()
+            st.session_state.val_g = "SCARICO 1"
             st.rerun()
 
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=False)
