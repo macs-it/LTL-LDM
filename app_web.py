@@ -4,7 +4,6 @@ from datetime import datetime
 from collections import OrderedDict
 
 import streamlit as st
-import pandas as pd
 from rectpack import newPacker, SORT_NONE
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -45,20 +44,55 @@ st.markdown("""
 # --- GESTIONE STATO ---
 if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
+if 'editing_index' not in st.session_state:
+    st.session_state.editing_index = None
 
-if 'val_g' not in st.session_state: st.session_state.val_g = "SCARICO 1"
+def get_next_scarico_name():
+    if not st.session_state.lista_di_carico: return "SCARICO 1"
+    return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
+
+if 'edit_g' not in st.session_state: st.session_state.edit_g = get_next_scarico_name()
+for val, default in [('edit_q', 1), ('edit_l', 120), ('edit_w', 80), ('edit_h', 150), ('edit_s', False)]:
+    if val not in st.session_state: st.session_state[val] = default
+
+# Valori effettivi legati ai widget (key="val_*")
+if 'val_g' not in st.session_state: st.session_state.val_g = get_next_scarico_name()
 for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
     if val not in st.session_state: st.session_state[val] = default
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
-    st.session_state.lista_di_carico.append((st.session_state.val_g.upper(), st.session_state.val_l, st.session_state.val_w, st.session_state.val_h, st.session_state.val_s, st.session_state.val_q))
+    voce = (
+        st.session_state.val_g.upper(),
+        st.session_state.val_l,
+        st.session_state.val_w,
+        st.session_state.val_h,
+        st.session_state.val_s,
+        st.session_state.val_q,
+    )
+    if st.session_state.editing_index is None:
+        st.session_state.lista_di_carico.append(voce)
+    else:
+        st.session_state.lista_di_carico[st.session_state.editing_index] = voce
+        st.session_state.editing_index = None
+
+    # Mantieni lo scarico corrente finché l'utente non lo cambia
+    st.session_state.val_q = 1
+    st.session_state.val_l = 120
+    st.session_state.val_w = 80
+    st.session_state.val_h = 150
+    st.session_state.val_s = False
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
+    if st.session_state.editing_index == index:
+        st.session_state.editing_index = None
+    elif st.session_state.editing_index is not None and index < st.session_state.editing_index:
+        st.session_state.editing_index -= 1
 
 def edita_riga(index):
-    g, l, w, h, s, q = st.session_state.lista_di_carico.pop(index)
+    g, l, w, h, s, q = st.session_state.lista_di_carico[index]
+    st.session_state.editing_index = index
     st.session_state.val_g = g
     st.session_state.val_l = l
     st.session_state.val_w = w
@@ -66,24 +100,25 @@ def edita_riga(index):
     st.session_state.val_s = s
     st.session_state.val_q = q
 
-# --- FUNZIONE LOGICA DI CALCOLO ---
+def annulla_modifica():
+    st.session_state.editing_index = None
+    # Mantieni la destinazione corrente, resetta gli altri campi
+    st.session_state.val_q = 1
+    st.session_state.val_l = 120
+    st.session_state.val_w = 80
+    st.session_state.val_h = 150
+    st.session_state.val_s = False
+
+# --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
 def calcola_posizionamento(lista_di_carico, allow_rotation):
     rects = []
     
-    gruppi_ordinati = OrderedDict()
-    for item in lista_di_carico:
-        g = item[0]
-        if g not in gruppi_ordinati: gruppi_ordinati[g] = []
-        gruppi_ordinati[g].append(item)
-        
-    lista_raggruppata = []
-    for g in gruppi_ordinati:
-        lista_raggruppata.extend(gruppi_ordinati[g])
-
     if not allow_rotation:
-        for g, l, w, h, s, q in lista_raggruppata:
+        # Algoritmo "Gravità" per scarichi in ordine
+        for g, l, w, h, s, q in lista_di_carico:
             tiers = max(1, 250 // h) if s else 1
             pezzi_rimanenti = q
+            
             for _ in range(math.ceil(q / tiers)):
                 pezzi_qui = min(pezzi_rimanenti, tiers)
                 label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
@@ -94,13 +129,15 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
                 for x in xs:
                     max_y = 0
                     for r in rects:
-                        if x < r['x'] + r['w'] and x + w > r['x']: max_y = max(max_y, r['y'] + r['h'])
+                        if x < r['x'] + r['w'] and x + w > r['x']: 
+                            max_y = max(max_y, r['y'] + r['h'])
                     if max_y < best_y: best_y, best_x = max_y, x
                 rects.append({'x': best_x, 'y': best_y, 'w': w, 'h': l, 'rid': label, 'gruppo': g})
     else:
+        # Algoritmo IA Rotazione Libera (Rectpack)
         p = newPacker(rotation=True, sort_algo=SORT_NONE)
         p.add_bin(CAMION_W, 10000)
-        for g, l, w, h, s, q in lista_raggruppata:
+        for g, l, w, h, s, q in lista_di_carico:
             tiers = max(1, 250 // h) if s else 1
             pezzi_rimanenti = q
             for _ in range(math.ceil(q / tiers)):
@@ -123,6 +160,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
     
+    # Intestazione e Info
     c.setFillColorRGB(0, 0.22, 0.41) 
     c.rect(0, height - 85, width, 85, fill=1)
     c.setFillColor(colors.yellow); c.setFont("Helvetica-Bold", 26)
@@ -134,6 +172,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.drawString(400, height - 110, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m")
 
+    # Grafico Camion
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4)) 
     ax_pdf.set_aspect('equal')
     ax_pdf.set_xlim(-50, 1400); ax_pdf.set_ylim(-20, 260)
@@ -154,6 +193,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     img_buffer.seek(0)
     c.drawImage(ImageReader(img_buffer), 30, 400, width=535, preserveAspectRatio=True)
 
+    # Tabella
     c.setFont("Helvetica-Bold", 13)
     c.drawString(45, 360, "ELENCO MERCI CARICATE:")
     table_data = [["Destinazione", "Dim. (cm)", "Q.tà", "Sovr."]]
@@ -180,41 +220,11 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
 col_sx, col_dx = st.columns([1.2, 1], gap="large")
 
 with col_sx:
-    # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
-    with st.expander("📁 Importa lista da Excel o CSV"):
-        st.markdown("""
-        <small>Il file deve contenere le colonne: <b>Destinazione, Qta, L, W, H, Sovr</b><br><br>
-        💡 <b>Sovr:</b> Indica se il bancale è sovrapponibile (regge altra merce sopra).<br>
-        <i>Scrivere 'si' o '1' se lo è, altrimenti 'no' o '0'.</i></small>
-        """, unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
-        
-        if uploaded_file is not None:
-            if st.button("📥 CARICA DATI", use_container_width=True):
-                try:
-                    if uploaded_file.name.endswith('.csv'):
-                        df = pd.read_csv(uploaded_file)
-                    else:
-                        df = pd.read_excel(uploaded_file)
-                    
-                    for index, row in df.iterrows():
-                        g = str(row.get('Destinazione', f'SCARICO {index+1}')).strip().upper()
-                        q = int(row.get('Qta', 1))
-                        l = int(row.get('L', 120))
-                        w = int(row.get('W', 80))
-                        h = int(row.get('H', 150))
-                        
-                        s_raw = str(row.get('Sovr', 'no')).strip().lower()
-                        s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
-                        
-                        st.session_state.lista_di_carico.append((g, l, w, h, s, q))
-                    
-                    st.success("Dati importati con successo!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Errore nella lettura del file: controlla che le colonne siano corrette. Dettaglio: {e}")
+    st.markdown("#### 📥 Inserimento Merci")
 
-    st.markdown("#### 📥 Inserimento Manuale")
+    if st.session_state.editing_index is not None:
+        g, l, w, h, s, q = st.session_state.lista_di_carico[st.session_state.editing_index]
+        st.warning(f"🟡 **MODIFICA IN CORSO** — stai modificando: {g} | {q} pz | {l}×{w}×{h} cm | Sovr: {'Sì' if s else 'No'}")
     
     st.text_input("📍 Destinazione (Scarico)", key="val_g")
     
@@ -223,11 +233,16 @@ with col_sx:
     with c2: st.number_input("L (cm)", min_value=1, key="val_l", step=10)
     with c3: st.number_input("W (cm)", min_value=1, key="val_w", step=10)
     with c4: st.number_input("H (cm)", min_value=1, key="val_h", step=10)
-    with c5: 
-        st.write("")
-        st.checkbox("Sovr.", key="val_s")
+    with c5: st.write(""); st.checkbox("Sovr.", key="val_s")
     
-    st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
+    if st.session_state.editing_index is None:
+        st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
+    else:
+        b1, b2 = st.columns([2, 1])
+        with b1:
+            st.button("✅ SALVA MODIFICA", on_click=aggiungi_voce, type="primary", use_container_width=True)
+        with b2:
+            st.button("✖️ ANNULLA", on_click=annulla_modifica, use_container_width=True)
 
     if st.session_state.lista_di_carico:
         st.markdown("---")
@@ -241,16 +256,19 @@ with col_sx:
             for i, item in items_gruppo:
                 _, l, w, h, s, q = item
                 cs1, cs2, cs3 = st.columns([8, 1, 1])
-                with cs1: st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}")
+                with cs1:
+                    if st.session_state.editing_index == i:
+                        st.warning(f"🟡 IN MODIFICA — {q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}")
+                    else:
+                        st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}")
                 with cs2: st.button("✏️", key=f"ed_{i}", on_click=edita_riga, args=(i,))
                 with cs3: st.button("❌", key=f"del_{i}", on_click=elimina_riga, args=(i,))
         
         if len(st.session_state.lista_di_carico) > 11:
             st.warning("⚠️ Hai inserito molti lotti. La tabella nel PDF potrebbe essere tagliata.")
-            
-        if st.button("🗑️ Svuota Tutto"): 
+        if st.button("🗑️ Svuota Tutto"):
             st.session_state.lista_di_carico.clear()
-            st.session_state.val_g = "SCARICO 1"
+            st.session_state.editing_index = None
             st.rerun()
 
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=False)
@@ -260,11 +278,17 @@ with col_dx:
     st.markdown("#### 📊 Risultato")
     if esegui and st.session_state.lista_di_carico:
         
+        # 1. Chiamata al cervello matematico
         rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
 
-        if max_L > CAMION_L: st.error(f"⛔ Eccesso: {max_L/100:.2f} m (Limite {CAMION_L/100}m)")
-        else: st.success(f"✅ Ingombro Totale: {max_L/100:.2f} m")
+        # 2. Messaggio di stato
+        overflow = max_L > CAMION_L
+        if overflow:
+            st.error(f"⛔ Eccesso: {max_L/100:.2f} m (Limite {CAMION_L/100}m). PDF non generato perché il carico non rientra nel pianale.")
+        else:
+            st.success(f"✅ Ingombro Totale: {max_L/100:.2f} m")
 
+        # 3. Disegno Anteprima Verticale
         total_h = max(CAMION_L, max_L + 50) + 50
         fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / CAMION_W)))
         ax_s.set_aspect('equal')
@@ -279,18 +303,20 @@ with col_dx:
             ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
         ax_s.axis('off')
 
-        pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L)
-        st.download_button(
-            label="📄 SCARICA REPORT PDF",
-            data=pdf_file,
-            file_name="Report_Carico_Vicenza.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
+        # 4. Bottone PDF (solo se il carico rientra)
+        if not overflow:
+            pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L)
+            st.download_button(
+                label="📄 SCARICA REPORT PDF",
+                data=pdf_file,
+                file_name="Report_Carico_Vicenza.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
         
         st.markdown("---")
         _, col_m, _ = st.columns([1.5, 2, 1.5])
         with col_m: st.pyplot(fig_s, use_container_width=True)
         
     elif not st.session_state.lista_di_carico:
-        st.info("💡 Aggiungi i bancali a sinistra o importa un file per visualizzare il piano di carico.")
+        st.info("💡 Aggiungi i bancali a sinistra per visualizzare il piano di carico.")
