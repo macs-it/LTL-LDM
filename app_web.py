@@ -19,6 +19,7 @@ from reportlab.lib.utils import ImageReader
 CAMION_W = 240
 CAMION_L = 1360
 PALETTE = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#e74c3c', '#1abc9c', '#34495e', '#d35400', '#7f8c8d']
+MAX_SOVR_LIVELLI_DEFAULT = 3
 
 # --- CONFIGURAZIONE PAGINA WEB ---
 st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide") 
@@ -56,9 +57,13 @@ for val, default in [('edit_q', 1), ('edit_l', 120), ('edit_w', 80), ('edit_h', 
     if val not in st.session_state: st.session_state[val] = default
 
 # Valori effettivi legati ai widget (key="val_*")
-if 'val_g' not in st.session_state: st.session_state.val_g = get_next_scarico_name()
+if 'val_g' not in st.session_state:
+    st.session_state.val_g = get_next_scarico_name()
 for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
-    if val not in st.session_state: st.session_state[val] = default
+    if val not in st.session_state:
+        st.session_state[val] = default
+if 'val_max_sovr' not in st.session_state:
+    st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
@@ -69,6 +74,7 @@ def aggiungi_voce():
         st.session_state.val_h,
         st.session_state.val_s,
         st.session_state.val_q,
+        st.session_state.val_max_sovr if st.session_state.val_s else 1,
     )
     if st.session_state.editing_index is None:
         st.session_state.lista_di_carico.append(voce)
@@ -82,6 +88,7 @@ def aggiungi_voce():
     st.session_state.val_w = 80
     st.session_state.val_h = 150
     st.session_state.val_s = False
+    st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
@@ -91,7 +98,12 @@ def elimina_riga(index):
         st.session_state.editing_index -= 1
 
 def edita_riga(index):
-    g, l, w, h, s, q = st.session_state.lista_di_carico[index]
+    item = st.session_state.lista_di_carico[index]
+    if len(item) == 6:
+        g, l, w, h, s, q = item
+        max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+    else:
+        g, l, w, h, s, q, max_liv = item
     st.session_state.editing_index = index
     st.session_state.val_g = g
     st.session_state.val_l = l
@@ -99,6 +111,7 @@ def edita_riga(index):
     st.session_state.val_h = h
     st.session_state.val_s = s
     st.session_state.val_q = q
+    st.session_state.val_max_sovr = max_liv
 
 def annulla_modifica():
     st.session_state.editing_index = None
@@ -108,50 +121,89 @@ def annulla_modifica():
     st.session_state.val_w = 80
     st.session_state.val_h = 150
     st.session_state.val_s = False
+    st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
 def calcola_posizionamento(lista_di_carico, allow_rotation):
-    rects = []
-    
-    if not allow_rotation:
-        # Algoritmo "Gravità" per scarichi in ordine
-        for g, l, w, h, s, q in lista_di_carico:
-            tiers = max(1, 250 // h) if s else 1
-            pezzi_rimanenti = q
-            
-            for _ in range(math.ceil(q / tiers)):
-                pezzi_qui = min(pezzi_rimanenti, tiers)
-                label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
-                pezzi_rimanenti -= pezzi_qui
-                
-                best_y = float('inf'); best_x = 0
-                xs = sorted(list(set([0] + [r['x'] + r['w'] for r in rects if r['x'] + r['w'] + w <= CAMION_W])))
-                for x in xs:
-                    max_y = 0
-                    for r in rects:
-                        if x < r['x'] + r['w'] and x + w > r['x']: 
-                            max_y = max(max_y, r['y'] + r['h'])
-                    if max_y < best_y: best_y, best_x = max_y, x
-                rects.append({'x': best_x, 'y': best_y, 'w': w, 'h': l, 'rid': label, 'gruppo': g})
-    else:
-        # Algoritmo IA Rotazione Libera (Rectpack)
-        p = newPacker(rotation=True, sort_algo=SORT_NONE)
-        p.add_bin(CAMION_W, 10000)
-        for g, l, w, h, s, q in lista_di_carico:
-            tiers = max(1, 250 // h) if s else 1
-            pezzi_rimanenti = q
-            for _ in range(math.ceil(q / tiers)):
-                pezzi_qui = min(pezzi_rimanenti, tiers)
-                label = f"{l}x{w}\n(x{pezzi_qui})" if pezzi_qui > 1 else f"{l}x{w}"
-                pezzi_rimanenti -= pezzi_qui
-                p.add_rect(w, l, rid=f"{g}###{label}")
-        p.pack()
-        for b in p:
-            for r in b:
-                g_e, l_e = str(r.rid).split("###")
-                rects.append({'x': r.x, 'y': r.y, 'w': r.width, 'h': r.height, 'rid': l_e, 'gruppo': g_e})
+    """
+    Packing a blocchi per gruppo (scarico): ogni gruppo resta contiguo lungo Y.
+    Dentro ogni gruppo si fa qualche tentativo (ordini diversi) e si sceglie la soluzione con lunghezza minore.
+    """
+    def tiers_per_item(h, sovrapponibile, max_livello_riga):
+        if not sovrapponibile:
+            return 1
+        # Limitato sia dal valore impostato sulla riga che dal vincolo altezza 250cm
+        return min(max_livello_riga, max(1, 250 // max(1, h)))
 
-    max_L = max([r['y'] + r['h'] for r in rects]) if rects else 0
+    def build_group_rects(items):
+        rect_reqs = []
+        uid = 0
+        for item in items:
+            if len(item) == 6:
+                g, l, w, h, s, q = item
+                max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+            else:
+                g, l, w, h, s, q, max_liv = item
+            tiers = tiers_per_item(h, s, max_liv)
+            pezzi_rimanenti = q
+            for _ in range(math.ceil(q / tiers)):
+                pezzi_qui = min(pezzi_rimanenti, tiers)
+                # Se sono presenti più pallet sovrapposti sulla stessa impronta, evidenzia il numero (es. X2)
+                label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
+                pezzi_rimanenti -= pezzi_qui
+                rect_reqs.append(
+                    {
+                        "w": w,
+                        "l": l,
+                        "rid": f"{g}###{label}###{uid}",
+                    }
+                )
+                uid += 1
+        return rect_reqs
+
+    def candidate_orders(rect_reqs):
+        base = list(rect_reqs)
+        yield base
+        yield sorted(base, key=lambda r: r["w"] * r["l"], reverse=True)  # area
+        yield sorted(base, key=lambda r: max(r["w"], r["l"]), reverse=True)  # lato lungo
+        yield sorted(base, key=lambda r: min(r["w"], r["l"]), reverse=True)  # lato corto
+        yield sorted(base, key=lambda r: (r["w"] + r["l"]), reverse=True)  # perimetro/2
+
+    def pack_one_group(rect_reqs):
+        best = None
+        for ordered in candidate_orders(rect_reqs):
+            p = newPacker(rotation=allow_rotation, sort_algo=SORT_NONE)
+            p.add_bin(CAMION_W, 20000)
+            for r in ordered:
+                p.add_rect(r["w"], r["l"], rid=r["rid"])
+            p.pack()
+            placed = p.rect_list()
+            if len(placed) != len(rect_reqs):
+                continue
+            group_len = max((y + h) for (_b, _x, y, _w, h, _rid) in placed) if placed else 0
+            if best is None or group_len < best["group_len"]:
+                best = {"placed": placed, "group_len": group_len}
+        if best is None:
+            raise ValueError("Impossibile posizionare tutti i colli (verifica che W <= 240cm e che le misure siano valide).")
+        return best["placed"], best["group_len"]
+
+    # 1) Raggruppa per prima occorrenza (ordine di inserimento)
+    gruppi = OrderedDict()
+    for item in lista_di_carico:
+        gruppi.setdefault(item[0], []).append(item)
+
+    # 2) Pack per gruppo e offset cumulativo lungo Y
+    rects = []
+    y_offset = 0
+    for g, items in gruppi.items():
+        rect_reqs = build_group_rects(items)
+        placed, group_len = pack_one_group(rect_reqs)
+        for (_b, x, y, w, h, rid) in placed:
+            g_e, label, _uid = str(rid).split("###")
+            rects.append({"x": x, "y": y + y_offset, "w": w, "h": h, "rid": label, "gruppo": g_e})
+        y_offset += group_len
+
+    max_L = y_offset
     return rects, max_L
 
 # --- FUNZIONE GENERAZIONE PDF ---
@@ -197,7 +249,16 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.setFont("Helvetica-Bold", 13)
     c.drawString(45, 360, "ELENCO MERCI CARICATE:")
     table_data = [["Destinazione", "Dim. (cm)", "Q.tà", "Sovr."]]
-    for g, l, w, h, s, q in lista_carico: table_data.append([g, f"{l}x{w}x{h}", str(q), "Sì" if s else "No"])
+    for item in lista_carico:
+        if len(item) == 6:
+            g, l, w, h, s, q = item
+            max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+        else:
+            g, l, w, h, s, q, max_liv = item
+        sovr_str = "Sì" if s else "No"
+        if s:
+            sovr_str += f" (max {max_liv})"
+        table_data.append([g, f"{l}x{w}x{h}", str(q), sovr_str])
     
     t = Table(table_data, colWidths=[180, 110, 60, 60])
     t.setStyle(TableStyle([
@@ -223,17 +284,41 @@ with col_sx:
     st.markdown("#### 📥 Inserimento Merci")
 
     if st.session_state.editing_index is not None:
-        g, l, w, h, s, q = st.session_state.lista_di_carico[st.session_state.editing_index]
-        st.warning(f"🟡 **MODIFICA IN CORSO** — stai modificando: {g} | {q} pz | {l}×{w}×{h} cm | Sovr: {'Sì' if s else 'No'}")
+        item = st.session_state.lista_di_carico[st.session_state.editing_index]
+        if len(item) == 6:
+            g, l, w, h, s, q = item
+            max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+        else:
+            g, l, w, h, s, q, max_liv = item
+        st.warning(
+            f"🟡 **MODIFICA IN CORSO** — stai modificando: {g} | {q} pz | {l}×{w}×{h} cm | "
+            f"Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}"
+        )
     
     st.text_input("📍 Destinazione (Scarico)", key="val_g")
     
-    c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8])
-    with c1: st.number_input("📦 Q.tà", min_value=1, key="val_q", step=1)
-    with c2: st.number_input("L (cm)", min_value=1, key="val_l", step=10)
-    with c3: st.number_input("W (cm)", min_value=1, key="val_w", step=10)
-    with c4: st.number_input("H (cm)", min_value=1, key="val_h", step=10)
-    with c5: st.write(""); st.checkbox("Sovr.", key="val_s")
+    c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8, 1.0])
+    with c1:
+        st.number_input("📦 Q.tà", min_value=1, key="val_q", step=1)
+    with c2:
+        st.number_input("L (cm)", min_value=1, key="val_l", step=10)
+    with c3:
+        st.number_input("W (cm)", min_value=1, key="val_w", step=10)
+    with c4:
+        st.number_input("H (cm)", min_value=1, key="val_h", step=10)
+    with c5:
+        st.write("")
+        st.checkbox("Sovr.", key="val_s")
+    with c6:
+        if st.session_state.val_s:
+            st.number_input(
+                "Max liv.",
+                min_value=1,
+                max_value=10,
+                key="val_max_sovr",
+                step=1,
+                help="Livelli massimi per questa riga (usato solo se Sovr. è spuntato).",
+            )
     
     if st.session_state.editing_index is None:
         st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
@@ -254,13 +339,17 @@ with col_sx:
         for g, items_gruppo in gruppi_vista.items():
             st.markdown(f"<h6 style='color:#00386A; margin-top: 15px; margin-bottom: 5px; font-weight:bold;'>📍 {g}</h6>", unsafe_allow_html=True)
             for i, item in items_gruppo:
-                _, l, w, h, s, q = item
+                if len(item) == 6:
+                    _, l, w, h, s, q = item
+                    max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+                else:
+                    _, l, w, h, s, q, max_liv = item
                 cs1, cs2, cs3 = st.columns([8, 1, 1])
                 with cs1:
                     if st.session_state.editing_index == i:
-                        st.warning(f"🟡 IN MODIFICA — {q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}")
+                        st.warning(f"🟡 IN MODIFICA — {q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}")
                     else:
-                        st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}")
+                        st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}")
                 with cs2: st.button("✏️", key=f"ed_{i}", on_click=edita_riga, args=(i,))
                 with cs3: st.button("❌", key=f"del_{i}", on_click=elimina_riga, args=(i,))
         
@@ -279,7 +368,11 @@ with col_dx:
     if esegui and st.session_state.lista_di_carico:
         
         # 1. Chiamata al cervello matematico
-        rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
+        try:
+            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
+        except ValueError as e:
+            st.error(f"⛔ {e}")
+            rects_to_draw, max_L = [], CAMION_L + 1
 
         # 2. Messaggio di stato
         overflow = max_L > CAMION_L
