@@ -4,6 +4,7 @@ from datetime import datetime
 from collections import OrderedDict
 
 import streamlit as st
+import pandas as pd  # <--- REINSERITO PER LEGGERE EXCEL/CSV
 from rectpack import newPacker, SORT_NONE
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -48,12 +49,10 @@ if 'lista_di_carico' not in st.session_state:
 if 'editing_index' not in st.session_state:
     st.session_state.editing_index = None
 
-
 def get_next_scarico_name():
     if not st.session_state.lista_di_carico:
         return "SCARICO 1"
     return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
-
 
 # Valori effettivi legati ai widget (key="val_*")
 if 'val_g' not in st.session_state:
@@ -64,7 +63,6 @@ for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150)
 # Max livelli sovrapponibilità: forza almeno il default globale (2) anche su sessioni vecchie
 if 'val_max_sovr' not in st.session_state or st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
-
 
 def _normalize_item(item):
     """
@@ -77,7 +75,6 @@ def _normalize_item(item):
     else:
         g, l, w, h, s, q, max_liv = item
     return g, l, w, h, s, q, max_liv
-
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
@@ -134,26 +131,15 @@ def annulla_modifica():
 
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
 def calcola_posizionamento(lista_di_carico, allow_rotation):
-    """
-    Se allow_rotation è False:
-        - Usa un algoritmo tipo \"gravità\" globale che posiziona ogni lotto in ordine di inserimento,
-          sfruttando lo spazio vicino all'ultimo bancale disponibile sul pianale.
-    Se allow_rotation è True:
-        - Usa rectpack per ogni gruppo (scarico) mantenendo i gruppi a blocchi contigui.
-    """
-
     def tiers_per_item(h, sovrapponibile, max_livello_riga):
         if not sovrapponibile:
             return 1
-        # Limitato sia dal valore impostato sulla riga che dal vincolo altezza 250cm
         return min(max_livello_riga, max(1, 250 // max(1, h)))
 
-    # --- Caso 1: nessuna rotazione, algoritmo \"gravità\" su tutti i lotti ---
     if not allow_rotation:
         rects = []
         for item in lista_di_carico:
             g, l, w, h, s, q, max_liv = _normalize_item(item)
-
             tiers = tiers_per_item(h, s, max_liv)
             pezzi_rimanenti = q
 
@@ -161,48 +147,23 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
                 pezzi_qui = min(pezzi_rimanenti, tiers)
                 pezzi_rimanenti -= pezzi_qui
 
-                # Etichetta con livelli sovrapposti (es. X2)
                 label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
 
                 best_y = float("inf")
                 best_x = 0
-                # Possibili posizioni di partenza in X, sfruttando lo spazio disponibile in larghezza
-                xs = sorted(
-                    list(
-                        set(
-                            [0]
-                            + [
-                                r["x"] + r["w"]
-                                for r in rects
-                                if r["x"] + r["w"] + w <= CAMION_W
-                            ]
-                        )
-                    )
-                )
+                xs = sorted(list(set([0] + [r["x"] + r["w"] for r in rects if r["x"] + r["w"] + w <= CAMION_W])))
                 for x in xs:
                     max_y = 0
                     for r in rects:
-                        # Se il nuovo rettangolo si sovrappone in X, \"cade\" sopra i rettangoli già presenti
                         if x < r["x"] + r["w"] and x + w > r["x"]:
                             max_y = max(max_y, r["y"] + r["h"])
                     if max_y < best_y:
                         best_y, best_x = max_y, x
 
-                rects.append(
-                    {
-                        "x": best_x,
-                        "y": best_y,
-                        "w": w,
-                        "h": l,
-                        "rid": label,
-                        "gruppo": g,
-                    }
-                )
+                rects.append({"x": best_x, "y": best_y, "w": w, "h": l, "rid": label, "gruppo": g})
 
         max_L = max([r["y"] + r["h"] for r in rects]) if rects else 0
         return rects, max_L
-
-    # --- Caso 2: rotazione libera, packing a blocchi per gruppo con rectpack ---
 
     def build_group_rects(items):
         rect_reqs = []
@@ -213,26 +174,19 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
             pezzi_rimanenti = q
             for _ in range(math.ceil(q / tiers)):
                 pezzi_qui = min(pezzi_rimanenti, tiers)
-                # Se sono presenti più pallet sovrapposti sulla stessa impronta, evidenzia il numero (es. X2)
                 label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
                 pezzi_rimanenti -= pezzi_qui
-                rect_reqs.append(
-                    {
-                        "w": w,
-                        "l": l,
-                        "rid": f"{g}###{label}###{uid}",
-                    }
-                )
+                rect_reqs.append({"w": w, "l": l, "rid": f"{g}###{label}###{uid}"})
                 uid += 1
         return rect_reqs
 
     def candidate_orders(rect_reqs):
         base = list(rect_reqs)
         yield base
-        yield sorted(base, key=lambda r: r["w"] * r["l"], reverse=True)  # area
-        yield sorted(base, key=lambda r: max(r["w"], r["l"]), reverse=True)  # lato lungo
-        yield sorted(base, key=lambda r: min(r["w"], r["l"]), reverse=True)  # lato corto
-        yield sorted(base, key=lambda r: (r["w"] + r["l"]), reverse=True)  # perimetro/2
+        yield sorted(base, key=lambda r: r["w"] * r["l"], reverse=True)
+        yield sorted(base, key=lambda r: max(r["w"], r["l"]), reverse=True)
+        yield sorted(base, key=lambda r: min(r["w"], r["l"]), reverse=True)
+        yield sorted(base, key=lambda r: (r["w"] + r["l"]), reverse=True)
 
     def pack_one_group(rect_reqs):
         best = None
@@ -252,12 +206,10 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
             raise ValueError("Impossibile posizionare tutti i colli (verifica che W <= 240cm e che le misure siano valide).")
         return best["placed"], best["group_len"]
 
-    # 1) Raggruppa per prima occorrenza (ordine di inserimento)
     gruppi = OrderedDict()
     for item in lista_di_carico:
         gruppi.setdefault(item[0], []).append(item)
 
-    # 2) Pack per gruppo e offset cumulativo lungo Y
     rects = []
     y_offset = 0
     for g, items in gruppi.items():
@@ -277,7 +229,6 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
     
-    # Intestazione e Info
     c.setFillColorRGB(0, 0.22, 0.41) 
     c.rect(0, height - 85, width, 85, fill=1)
     c.setFillColor(colors.yellow); c.setFont("Helvetica-Bold", 26)
@@ -289,7 +240,6 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.drawString(400, height - 110, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m")
 
-    # Grafico Camion
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4))
     ax_pdf.set_aspect('equal')
     ax_pdf.set_xlim(-50, 1400); ax_pdf.set_ylim(-20, 260)
@@ -301,25 +251,9 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     
     for r in rects:
         ax_pdf.add_patch(
-            patches.Rectangle(
-                (r['y'], r['x']),
-                r['h'],
-                r['w'],
-                facecolor=mappa_c[r['gruppo']],
-                edgecolor='black',
-                alpha=0.85,
-                lw=0.7,
-            )
+            patches.Rectangle((r['y'], r['x']), r['h'], r['w'], facecolor=mappa_c[r['gruppo']], edgecolor='black', alpha=0.85, lw=0.7)
         )
-        ax_pdf.text(
-            r['y'] + r['h'] / 2,
-            r['x'] + r['w'] / 2,
-            r['rid'].replace('\n', ' '),
-            ha='center',
-            va='center',
-            fontsize=7,
-            fontweight='bold',
-        )
+        ax_pdf.text(r['y'] + r['h'] / 2, r['x'] + r['w'] / 2, r['rid'].replace('\n', ' '), ha='center', va='center', fontsize=7, fontweight='bold')
     
     ax_pdf.axis('off')
     img_buffer = io.BytesIO()
@@ -328,10 +262,9 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     img_buffer.seek(0)
     c.drawImage(ImageReader(img_buffer), 30, 400, width=535, preserveAspectRatio=True)
 
-    # Legenda colori per i diversi scarichi (spostata in alto a destra per non sovrapporsi alla tabella)
     if gruppi_u:
-        legend_x = width - 180  # margine destro
-        legend_y = height - 150  # sotto l'intestazione
+        legend_x = width - 180
+        legend_y = height - 150
         row_h = 12
         c.setFont("Helvetica", 9)
         c.setFillColor(colors.black)
@@ -344,7 +277,6 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
             c.setFillColor(colors.black)
             c.drawString(legend_x + 16, y + 1, str(g))
 
-    # Tabella
     c.setFont("Helvetica-Bold", 13)
     c.drawString(45, 360, "ELENCO MERCI CARICATE:")
     table_data = [["Destinazione", "Dim. (cm)", "Q.tà", "Sovr."]]
@@ -379,7 +311,47 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
 col_sx, col_dx = st.columns([1.2, 1], gap="large")
 
 with col_sx:
-    st.markdown("#### 📥 Inserimento Merci")
+    # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
+    with st.expander("📁 Importa lista da Excel o CSV"):
+        st.markdown("""
+        <small>Il file deve contenere le colonne: <b>Destinazione, Qta, L, W, H, Sovr</b> (opzionale: <b>Max_Liv</b>).<br><br>
+        💡 <b>Sovr:</b> 'si' o '1' se è sovrapponibile, 'no' o '0' se non lo è.<br>
+        💡 <b>Max_Liv:</b> Livelli massimi consentiti per l'impilaggio (se vuoto, usa il default).</small>
+        """, unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
+        
+        if uploaded_file is not None:
+            if st.button("📥 CARICA DATI", use_container_width=True):
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_file)
+                    else:
+                        df = pd.read_excel(uploaded_file)
+                    
+                    for index, row in df.iterrows():
+                        g = str(row.get('Destinazione', f'SCARICO {index+1}')).strip().upper()
+                        q = int(row.get('Qta', 1))
+                        l = int(row.get('L', 120))
+                        w = int(row.get('W', 80))
+                        h = int(row.get('H', 150))
+                        
+                        s_raw = str(row.get('Sovr', 'no')).strip().lower()
+                        s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
+                        
+                        # Legge Max_Liv se presente, altrimenti applica il default/calcolo
+                        max_liv_raw = row.get('Max_Liv', MAX_SOVR_LIVELLI_DEFAULT if s else 1)
+                        max_liv = int(max_liv_raw) if not pd.isna(max_liv_raw) else (MAX_SOVR_LIVELLI_DEFAULT if s else 1)
+                        if not s: 
+                            max_liv = 1
+                        
+                        st.session_state.lista_di_carico.append((g, l, w, h, s, q, max_liv))
+                    
+                    st.success("Dati importati con successo!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Errore nella lettura del file: controlla che le colonne siano corrette. Dettaglio: {e}")
+
+    st.markdown("#### 📥 Inserimento Manuale")
 
     if st.session_state.editing_index is not None:
         g, l, w, h, s, q, max_liv = _normalize_item(
@@ -405,18 +377,10 @@ with col_sx:
         st.write("")
         st.checkbox("Sovr.", key="val_s")
     with c6:
-        # Se l'utente ha appena abilitato la sovrapponibilità, imposta il default a 2 livelli
         if st.session_state.val_s and st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
             st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
         if st.session_state.val_s:
-            st.number_input(
-                "Max liv.",
-                min_value=1,
-                max_value=10,
-                key="val_max_sovr",
-                step=1,
-                help="Livelli massimi per questa riga (usato solo se Sovr. è spuntato).",
-            )
+            st.number_input("Max liv.", min_value=1, max_value=10, key="val_max_sovr", step=1, help="Livelli massimi per questa riga.")
     
     if st.session_state.editing_index is None:
         st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
@@ -461,14 +425,12 @@ with col_dx:
     st.markdown("#### 📊 Risultato")
     if esegui and st.session_state.lista_di_carico:
         
-        # 1. Chiamata al cervello matematico
         try:
             rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
         except ValueError as e:
             st.error(f"⛔ {e}")
             rects_to_draw, max_L = [], CAMION_L + 1
 
-        # 2. Messaggio di stato (ingombro evidenziato graficamente)
         overflow = max_L > CAMION_L
         ingombro_m = max_L / 100
         limite_m = CAMION_L / 100
@@ -503,7 +465,6 @@ with col_dx:
             unsafe_allow_html=True,
         )
 
-        # 3. Disegno Anteprima Verticale
         total_h = max(CAMION_L, max_L + 50) + 50
         fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / CAMION_W)))
         ax_s.set_aspect('equal')
@@ -518,7 +479,6 @@ with col_dx:
             ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
         ax_s.axis('off')
 
-        # 4. Bottone PDF (solo se il carico rientra)
         if not overflow:
             pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L)
             st.download_button(
