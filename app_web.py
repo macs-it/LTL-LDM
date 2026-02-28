@@ -4,7 +4,7 @@ from datetime import datetime
 from collections import OrderedDict
 
 import streamlit as st
-import pandas as pd  # <--- REINSERITO PER LEGGERE EXCEL/CSV
+import pandas as pd
 from rectpack import newPacker, SORT_NONE
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -54,15 +54,12 @@ def get_next_scarico_name():
         return "SCARICO 1"
     return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
 
-# Valori effettivi legati ai widget (key="val_*")
+# Inizializzazione pulita di tutte le variabili collegate ai campi
 if 'val_g' not in st.session_state:
     st.session_state.val_g = get_next_scarico_name()
-for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
+for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False), ('val_max_sovr', MAX_SOVR_LIVELLI_DEFAULT)]:
     if val not in st.session_state:
         st.session_state[val] = default
-# Max livelli sovrapponibilità: forza almeno il default globale (2) anche su sessioni vecchie
-if 'val_max_sovr' not in st.session_state or st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
-    st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 def _normalize_item(item):
     """
@@ -75,6 +72,12 @@ def _normalize_item(item):
     else:
         g, l, w, h, s, q, max_liv = item
     return g, l, w, h, s, q, max_liv
+
+# --- CALLBACK PER LA CASELLA SOVRAPPONIBILE ---
+def on_sovr_change():
+    """Viene eseguita nell'istante in cui si clicca la spunta Sovr."""
+    if st.session_state.val_s:
+        st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
@@ -93,7 +96,6 @@ def aggiungi_voce():
         st.session_state.lista_di_carico[st.session_state.editing_index] = voce
         st.session_state.editing_index = None
 
-    # Mantieni lo scarico corrente finché l'utente non lo cambia
     st.session_state.val_q = 1
     st.session_state.val_l = 120
     st.session_state.val_w = 80
@@ -121,7 +123,6 @@ def edita_riga(index):
 
 def annulla_modifica():
     st.session_state.editing_index = None
-    # Mantieni la destinazione corrente, resetta gli altri campi
     st.session_state.val_q = 1
     st.session_state.val_l = 120
     st.session_state.val_w = 80
@@ -338,7 +339,6 @@ with col_sx:
                         s_raw = str(row.get('Sovr', 'no')).strip().lower()
                         s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
                         
-                        # Legge Max_Liv se presente, altrimenti applica il default/calcolo
                         max_liv_raw = row.get('Max_Liv', MAX_SOVR_LIVELLI_DEFAULT if s else 1)
                         max_liv = int(max_liv_raw) if not pd.isna(max_liv_raw) else (MAX_SOVR_LIVELLI_DEFAULT if s else 1)
                         if not s: 
@@ -375,10 +375,10 @@ with col_sx:
         st.number_input("H (cm)", min_value=1, key="val_h", step=10)
     with c5:
         st.write("")
-        st.checkbox("Sovr.", key="val_s")
+        # --- QUI HO AGGIUNTO IL CALLBACK on_change ---
+        st.checkbox("Sovr.", key="val_s", on_change=on_sovr_change)
     with c6:
-        if st.session_state.val_s and st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
-            st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
+        # Il box compare solo se val_s è True e userà il valore forzato a 2 dal callback
         if st.session_state.val_s:
             st.number_input("Max liv.", min_value=1, max_value=10, key="val_max_sovr", step=1, help="Livelli massimi per questa riga.")
     
