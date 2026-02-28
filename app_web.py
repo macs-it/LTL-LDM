@@ -48,13 +48,12 @@ if 'lista_di_carico' not in st.session_state:
 if 'editing_index' not in st.session_state:
     st.session_state.editing_index = None
 
+
 def get_next_scarico_name():
-    if not st.session_state.lista_di_carico: return "SCARICO 1"
+    if not st.session_state.lista_di_carico:
+        return "SCARICO 1"
     return f"SCARICO {len(OrderedDict.fromkeys([item[0] for item in st.session_state.lista_di_carico])) + 1}"
 
-if 'edit_g' not in st.session_state: st.session_state.edit_g = get_next_scarico_name()
-for val, default in [('edit_q', 1), ('edit_l', 120), ('edit_w', 80), ('edit_h', 150), ('edit_s', False)]:
-    if val not in st.session_state: st.session_state[val] = default
 
 # Valori effettivi legati ai widget (key="val_*")
 if 'val_g' not in st.session_state:
@@ -65,6 +64,20 @@ for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150)
 # Max livelli sovrapponibilità: forza almeno il default globale (2) anche su sessioni vecchie
 if 'val_max_sovr' not in st.session_state or st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
+
+
+def _normalize_item(item):
+    """
+    Ritorna sempre una tupla a 7 elementi:
+    (g, l, w, h, s, q, max_livelli)
+    """
+    if len(item) == 6:
+        g, l, w, h, s, q = item
+        max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+    else:
+        g, l, w, h, s, q, max_liv = item
+    return g, l, w, h, s, q, max_liv
+
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
@@ -99,12 +112,7 @@ def elimina_riga(index):
         st.session_state.editing_index -= 1
 
 def edita_riga(index):
-    item = st.session_state.lista_di_carico[index]
-    if len(item) == 6:
-        g, l, w, h, s, q = item
-        max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
-    else:
-        g, l, w, h, s, q, max_liv = item
+    g, l, w, h, s, q, max_liv = _normalize_item(st.session_state.lista_di_carico[index])
     st.session_state.editing_index = index
     st.session_state.val_g = g
     st.session_state.val_l = l
@@ -144,11 +152,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
     if not allow_rotation:
         rects = []
         for item in lista_di_carico:
-            if len(item) == 6:
-                g, l, w, h, s, q = item
-                max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
-            else:
-                g, l, w, h, s, q, max_liv = item
+            g, l, w, h, s, q, max_liv = _normalize_item(item)
 
             tiers = tiers_per_item(h, s, max_liv)
             pezzi_rimanenti = q
@@ -204,11 +208,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
         rect_reqs = []
         uid = 0
         for item in items:
-            if len(item) == 6:
-                g, l, w, h, s, q = item
-                max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
-            else:
-                g, l, w, h, s, q, max_liv = item
+            g, l, w, h, s, q, max_liv = _normalize_item(item)
             tiers = tiers_per_item(h, s, max_liv)
             pezzi_rimanenti = q
             for _ in range(math.ceil(q / tiers)):
@@ -349,11 +349,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.drawString(45, 360, "ELENCO MERCI CARICATE:")
     table_data = [["Destinazione", "Dim. (cm)", "Q.tà", "Sovr."]]
     for item in lista_carico:
-        if len(item) == 6:
-            g, l, w, h, s, q = item
-            max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
-        else:
-            g, l, w, h, s, q, max_liv = item
+        g, l, w, h, s, q, max_liv = _normalize_item(item)
         sovr_str = "Sì" if s else "No"
         if s:
             sovr_str += f" (max {max_liv})"
@@ -386,12 +382,9 @@ with col_sx:
     st.markdown("#### 📥 Inserimento Merci")
 
     if st.session_state.editing_index is not None:
-        item = st.session_state.lista_di_carico[st.session_state.editing_index]
-        if len(item) == 6:
-            g, l, w, h, s, q = item
-            max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
-        else:
-            g, l, w, h, s, q, max_liv = item
+        g, l, w, h, s, q, max_liv = _normalize_item(
+            st.session_state.lista_di_carico[st.session_state.editing_index]
+        )
         st.warning(
             f"🟡 **MODIFICA IN CORSO** — stai modificando: {g} | {q} pz | {l}×{w}×{h} cm | "
             f"Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}"
@@ -444,11 +437,7 @@ with col_sx:
         for g, items_gruppo in gruppi_vista.items():
             st.markdown(f"<h6 style='color:#00386A; margin-top: 15px; margin-bottom: 5px; font-weight:bold;'>📍 {g}</h6>", unsafe_allow_html=True)
             for i, item in items_gruppo:
-                if len(item) == 6:
-                    _, l, w, h, s, q = item
-                    max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
-                else:
-                    _, l, w, h, s, q, max_liv = item
+                _, l, w, h, s, q, max_liv = _normalize_item(item)
                 cs1, cs2, cs3 = st.columns([8, 1, 1])
                 with cs1:
                     if st.session_state.editing_index == i:
