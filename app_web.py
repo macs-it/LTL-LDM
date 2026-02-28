@@ -19,7 +19,7 @@ from reportlab.lib.utils import ImageReader
 CAMION_W = 240
 CAMION_L = 1360
 PALETTE = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#e74c3c', '#1abc9c', '#34495e', '#d35400', '#7f8c8d']
-MAX_SOVR_LIVELLI_DEFAULT = 3
+MAX_SOVR_LIVELLI_DEFAULT = 2
 
 # --- CONFIGURAZIONE PAGINA WEB ---
 st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide") 
@@ -62,7 +62,8 @@ if 'val_g' not in st.session_state:
 for val, default in [('val_q', 1), ('val_l', 120), ('val_w', 80), ('val_h', 150), ('val_s', False)]:
     if val not in st.session_state:
         st.session_state[val] = default
-if 'val_max_sovr' not in st.session_state:
+# Max livelli sovrapponibilità: forza almeno il default globale (2) anche su sessioni vecchie
+if 'val_max_sovr' not in st.session_state or st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONI LISTA INTERFACCIA ---
@@ -126,14 +127,78 @@ def annulla_modifica():
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
 def calcola_posizionamento(lista_di_carico, allow_rotation):
     """
-    Packing a blocchi per gruppo (scarico): ogni gruppo resta contiguo lungo Y.
-    Dentro ogni gruppo si fa qualche tentativo (ordini diversi) e si sceglie la soluzione con lunghezza minore.
+    Se allow_rotation è False:
+        - Usa un algoritmo tipo \"gravità\" globale che posiziona ogni lotto in ordine di inserimento,
+          sfruttando lo spazio vicino all'ultimo bancale disponibile sul pianale.
+    Se allow_rotation è True:
+        - Usa rectpack per ogni gruppo (scarico) mantenendo i gruppi a blocchi contigui.
     """
+
     def tiers_per_item(h, sovrapponibile, max_livello_riga):
         if not sovrapponibile:
             return 1
         # Limitato sia dal valore impostato sulla riga che dal vincolo altezza 250cm
         return min(max_livello_riga, max(1, 250 // max(1, h)))
+
+    # --- Caso 1: nessuna rotazione, algoritmo \"gravità\" su tutti i lotti ---
+    if not allow_rotation:
+        rects = []
+        for item in lista_di_carico:
+            if len(item) == 6:
+                g, l, w, h, s, q = item
+                max_liv = MAX_SOVR_LIVELLI_DEFAULT if s else 1
+            else:
+                g, l, w, h, s, q, max_liv = item
+
+            tiers = tiers_per_item(h, s, max_liv)
+            pezzi_rimanenti = q
+
+            for _ in range(math.ceil(q / tiers)):
+                pezzi_qui = min(pezzi_rimanenti, tiers)
+                pezzi_rimanenti -= pezzi_qui
+
+                # Etichetta con livelli sovrapposti (es. X2)
+                label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
+
+                best_y = float("inf")
+                best_x = 0
+                # Possibili posizioni di partenza in X, sfruttando lo spazio disponibile in larghezza
+                xs = sorted(
+                    list(
+                        set(
+                            [0]
+                            + [
+                                r["x"] + r["w"]
+                                for r in rects
+                                if r["x"] + r["w"] + w <= CAMION_W
+                            ]
+                        )
+                    )
+                )
+                for x in xs:
+                    max_y = 0
+                    for r in rects:
+                        # Se il nuovo rettangolo si sovrappone in X, \"cade\" sopra i rettangoli già presenti
+                        if x < r["x"] + r["w"] and x + w > r["x"]:
+                            max_y = max(max_y, r["y"] + r["h"])
+                    if max_y < best_y:
+                        best_y, best_x = max_y, x
+
+                rects.append(
+                    {
+                        "x": best_x,
+                        "y": best_y,
+                        "w": w,
+                        "h": l,
+                        "rid": label,
+                        "gruppo": g,
+                    }
+                )
+
+        max_L = max([r["y"] + r["h"] for r in rects]) if rects else 0
+        return rects, max_L
+
+    # --- Caso 2: rotazione libera, packing a blocchi per gruppo con rectpack ---
 
     def build_group_rects(items):
         rect_reqs = []
@@ -172,7 +237,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
     def pack_one_group(rect_reqs):
         best = None
         for ordered in candidate_orders(rect_reqs):
-            p = newPacker(rotation=allow_rotation, sort_algo=SORT_NONE)
+            p = newPacker(rotation=True, sort_algo=SORT_NONE)
             p.add_bin(CAMION_W, 20000)
             for r in ordered:
                 p.add_rect(r["w"], r["l"], rid=r["rid"])
@@ -217,7 +282,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.rect(0, height - 85, width, 85, fill=1)
     c.setFillColor(colors.yellow); c.setFont("Helvetica-Bold", 26)
     c.drawString(45, height - 45, "DACHSER")
-    c.setFillColor(colors.white); c.setFont("Helvetica", 12)
+    c.setFillColor(colors.white); c.setFont("Helvetica", 13)
     c.drawString(45, height - 70, "REPORT DI CARICO - Filiale di Vicenza")
     
     c.setFillColor(colors.black); c.setFont("Helvetica-Bold", 10)
@@ -225,7 +290,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m")
 
     # Grafico Camion
-    fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4)) 
+    fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4))
     ax_pdf.set_aspect('equal')
     ax_pdf.set_xlim(-50, 1400); ax_pdf.set_ylim(-20, 260)
     ax_pdf.add_patch(patches.Rectangle((0, 0), CAMION_L, CAMION_W, fill=False, edgecolor='#00386A', lw=2))
@@ -235,8 +300,26 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
     
     for r in rects:
-        ax_pdf.add_patch(patches.Rectangle((r['y'], r['x']), r['h'], r['w'], facecolor=mappa_c[r['gruppo']], edgecolor='black', alpha=0.9, lw=0.7))
-        ax_pdf.text(r['y']+r['h']/2, r['x']+r['w']/2, r['rid'].replace('\n',' '), ha='center', va='center', fontsize=6, fontweight='bold')
+        ax_pdf.add_patch(
+            patches.Rectangle(
+                (r['y'], r['x']),
+                r['h'],
+                r['w'],
+                facecolor=mappa_c[r['gruppo']],
+                edgecolor='black',
+                alpha=0.85,
+                lw=0.7,
+            )
+        )
+        ax_pdf.text(
+            r['y'] + r['h'] / 2,
+            r['x'] + r['w'] / 2,
+            r['rid'].replace('\n', ' '),
+            ha='center',
+            va='center',
+            fontsize=7,
+            fontweight='bold',
+        )
     
     ax_pdf.axis('off')
     img_buffer = io.BytesIO()
@@ -244,6 +327,22 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     plt.close(fig_pdf)
     img_buffer.seek(0)
     c.drawImage(ImageReader(img_buffer), 30, 400, width=535, preserveAspectRatio=True)
+
+    # Legenda colori per i diversi scarichi (spostata in alto a destra per non sovrapporsi alla tabella)
+    if gruppi_u:
+        legend_x = width - 180  # margine destro
+        legend_y = height - 150  # sotto l'intestazione
+        row_h = 12
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.black)
+        c.drawString(legend_x, legend_y + 10, "Legenda scarichi:")
+        for idx, g in enumerate(gruppi_u):
+            y = legend_y - (idx + 1) * row_h
+            col = colors.HexColor(mappa_c[g])
+            c.setFillColor(col)
+            c.rect(legend_x, y, 10, 10, fill=1, stroke=0)
+            c.setFillColor(colors.black)
+            c.drawString(legend_x + 16, y + 1, str(g))
 
     # Tabella
     c.setFont("Helvetica-Bold", 13)
@@ -260,13 +359,16 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
             sovr_str += f" (max {max_liv})"
         table_data.append([g, f"{l}x{w}x{h}", str(q), sovr_str])
     
-    t = Table(table_data, colWidths=[180, 110, 60, 60])
+    t = Table(table_data, colWidths=[190, 120, 60, 70])
     t.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#00386A")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.yellow),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('GRID', (0, 0), (-1, -1), 0.7, colors.grey),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     t.wrapOn(c, width, height)
     t.drawOn(c, 45, 340 - (len(table_data) * 20))
@@ -310,6 +412,9 @@ with col_sx:
         st.write("")
         st.checkbox("Sovr.", key="val_s")
     with c6:
+        # Se l'utente ha appena abilitato la sovrapponibilità, imposta il default a 2 livelli
+        if st.session_state.val_s and st.session_state.val_max_sovr < MAX_SOVR_LIVELLI_DEFAULT:
+            st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
         if st.session_state.val_s:
             st.number_input(
                 "Max liv.",
@@ -374,12 +479,40 @@ with col_dx:
             st.error(f"⛔ {e}")
             rects_to_draw, max_L = [], CAMION_L + 1
 
-        # 2. Messaggio di stato
+        # 2. Messaggio di stato (ingombro evidenziato graficamente)
         overflow = max_L > CAMION_L
+        ingombro_m = max_L / 100
+        limite_m = CAMION_L / 100
         if overflow:
-            st.error(f"⛔ Eccesso: {max_L/100:.2f} m (Limite {CAMION_L/100}m). PDF non generato perché il carico non rientra nel pianale.")
+            card_bg = "#ffe6e6"
+            card_border = "#e74c3c"
+            card_text = f"⛔ Ingombro: {ingombro_m:.2f} m (Limite {limite_m:.2f} m)"
+            card_sub = "Il carico supera la lunghezza utile del pianale. PDF non generato."
         else:
-            st.success(f"✅ Ingombro Totale: {max_L/100:.2f} m")
+            card_bg = "#e8ffe6"
+            card_border = "#2ecc71"
+            card_text = f"✅ Ingombro Totale: {ingombro_m:.2f} m su {limite_m:.2f} m disponibili"
+            card_sub = "Il carico rientra nel pianale."
+
+        st.markdown(
+            f"""
+            <div style="
+                padding: 14px 18px;
+                margin-bottom: 10px;
+                border-radius: 10px;
+                border: 2px solid {card_border};
+                background-color: {card_bg};
+            ">
+                <div style="font-size: 1.6rem; font-weight: 900; color: #00386A; margin-bottom: 4px;">
+                    {card_text}
+                </div>
+                <div style="font-size: 0.9rem; color: #333333;">
+                    {card_sub}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         # 3. Disegno Anteprima Verticale
         total_h = max(CAMION_L, max_L + 50) + 50
