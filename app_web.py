@@ -326,7 +326,7 @@ with col_sx:
         uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
         
         if uploaded_file is not None:
-            if st.button("📥 CARICA DATI", width="stretch"):
+            if st.button("📥 CARICA DATI", use_container_width=True):
                 try:
                     if uploaded_file.name.endswith('.csv'):
                         df = pd.read_csv(uploaded_file)
@@ -385,13 +385,13 @@ with col_sx:
             st.number_input("Max liv.", min_value=1, max_value=10, key="val_max_sovr", step=1, help="Livelli massimi per questa riga.")
     
     if st.session_state.editing_index is None:
-        st.button("➕ AGGIUNGI", on_click=aggiungi_voce, width="stretch")
+        st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
     else:
         b1, b2 = st.columns([2, 1])
         with b1:
-            st.button("✅ SALVA MODIFICA", on_click=aggiungi_voce, type="primary", width="stretch")
+            st.button("✅ SALVA MODIFICA", on_click=aggiungi_voce, type="primary", use_container_width=True)
         with b2:
-            st.button("✖️ ANNULLA", on_click=annulla_modifica, width="stretch")
+            st.button("✖️ ANNULLA", on_click=annulla_modifica, use_container_width=True)
 
     if st.session_state.lista_di_carico:
         st.markdown("---")
@@ -421,7 +421,7 @@ with col_sx:
             st.rerun()
 
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=True)
-    esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch")
+    esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", use_container_width=True)
 
 with col_dx:
     st.markdown("#### 📊 Risultato")
@@ -488,7 +488,7 @@ with col_dx:
                 data=pdf_file,
                 file_name="Report_Carico_Vicenza.pdf",
                 mime="application/pdf",
-                width="stretch"
+                use_container_width=True
             )
         
         st.markdown("---")
