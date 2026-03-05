@@ -17,8 +17,6 @@ from reportlab.platypus import Table, TableStyle
 from reportlab.lib.utils import ImageReader
 
 # --- COSTANTI DI CONFIGURAZIONE ---
-CAMION_W = 240
-CAMION_L = 1360
 PALETTE = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#e74c3c', '#1abc9c', '#34495e', '#d35400', '#7f8c8d']
 MAX_SOVR_LIVELLI_DEFAULT = 2
 
@@ -131,7 +129,7 @@ def annulla_modifica():
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
-def calcola_posizionamento(lista_di_carico, allow_rotation):
+def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w):
     def tiers_per_item(h, sovrapponibile, max_livello_riga):
         if not sovrapponibile:
             return 1
@@ -152,7 +150,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
 
                 best_y = float("inf")
                 best_x = 0
-                xs = sorted(list(set([0] + [r["x"] + r["w"] for r in rects if r["x"] + r["w"] + w <= CAMION_W])))
+                xs = sorted(list(set([0] + [r["x"] + r["w"] for r in rects if r["x"] + r["w"] + w <= camion_w])))
                 for x in xs:
                     max_y = 0
                     for r in rects:
@@ -193,7 +191,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
         best = None
         for ordered in candidate_orders(rect_reqs):
             p = newPacker(rotation=True, sort_algo=SORT_NONE)
-            p.add_bin(CAMION_W, 20000)
+            p.add_bin(camion_w, 20000)
             for r in ordered:
                 p.add_rect(r["w"], r["l"], rid=r["rid"])
             p.pack()
@@ -204,7 +202,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
             if best is None or group_len < best["group_len"]:
                 best = {"placed": placed, "group_len": group_len}
         if best is None:
-            raise ValueError("Impossibile posizionare tutti i colli (verifica che W <= 240cm e che le misure siano valide).")
+            raise ValueError(f"Impossibile posizionare tutti i colli (verifica che la larghezza W non superi i {camion_w}cm).")
         return best["placed"], best["group_len"]
 
     gruppi = OrderedDict()
@@ -225,7 +223,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation):
     return rects, max_L
 
 # --- FUNZIONE GENERAZIONE PDF ---
-def genera_pdf_reportlab(rects, lista_carico, ingombro):
+def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -239,13 +237,13 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
     
     c.setFillColor(colors.black); c.setFont("Helvetica-Bold", 10)
     c.drawString(400, height - 110, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m")
+    c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m (su {camion_l/100:.2f} m)")
 
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4))
     ax_pdf.set_aspect('equal')
-    ax_pdf.set_xlim(-50, 1400); ax_pdf.set_ylim(-20, 260)
-    ax_pdf.add_patch(patches.Rectangle((0, 0), CAMION_L, CAMION_W, fill=False, edgecolor='#00386A', lw=2))
-    ax_pdf.text(-30, 120, "CABINA", ha='center', va='center', fontweight='bold', color='#00386A', rotation=90)
+    ax_pdf.set_xlim(-50, max(1400, camion_l + 50)); ax_pdf.set_ylim(-20, max(260, camion_w + 20))
+    ax_pdf.add_patch(patches.Rectangle((0, 0), camion_l, camion_w, fill=False, edgecolor='#00386A', lw=2))
+    ax_pdf.text(-30, camion_w/2, "CABINA", ha='center', va='center', fontweight='bold', color='#00386A', rotation=90)
     
     gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects]))
     mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
@@ -312,6 +310,12 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro):
 col_sx, col_dx = st.columns([1.2, 1], gap="large")
 
 with col_sx:
+    # --- SEZIONE IMPOSTAZIONI CAMION ---
+    with st.expander("🚛 Dimensioni Camion", expanded=False):
+        st.markdown("<small>Modifica le dimensioni utili del pianale. Default: Bilico standard (240x1360 cm).</small>", unsafe_allow_html=True)
+        camion_w = st.number_input("Larghezza utile (cm)", min_value=100, max_value=300, value=240, step=5)
+        camion_l = st.number_input("Lunghezza utile (cm)", min_value=200, max_value=2000, value=1360, step=10)
+
     # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
     with st.expander("📁 Importa lista da Excel o CSV"):
         st.markdown("""
@@ -322,7 +326,7 @@ with col_sx:
         uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
         
         if uploaded_file is not None:
-            if st.button("📥 CARICA DATI", use_container_width=True):
+            if st.button("📥 CARICA DATI", width="stretch"):
                 try:
                     if uploaded_file.name.endswith('.csv'):
                         df = pd.read_csv(uploaded_file)
@@ -381,13 +385,13 @@ with col_sx:
             st.number_input("Max liv.", min_value=1, max_value=10, key="val_max_sovr", step=1, help="Livelli massimi per questa riga.")
     
     if st.session_state.editing_index is None:
-        st.button("➕ AGGIUNGI", on_click=aggiungi_voce, use_container_width=True)
+        st.button("➕ AGGIUNGI", on_click=aggiungi_voce, width="stretch")
     else:
         b1, b2 = st.columns([2, 1])
         with b1:
-            st.button("✅ SALVA MODIFICA", on_click=aggiungi_voce, type="primary", use_container_width=True)
+            st.button("✅ SALVA MODIFICA", on_click=aggiungi_voce, type="primary", width="stretch")
         with b2:
-            st.button("✖️ ANNULLA", on_click=annulla_modifica, use_container_width=True)
+            st.button("✖️ ANNULLA", on_click=annulla_modifica, width="stretch")
 
     if st.session_state.lista_di_carico:
         st.markdown("---")
@@ -416,28 +420,27 @@ with col_sx:
             st.session_state.editing_index = None
             st.rerun()
 
-    # --- QUI HO IMPOSTATO IL DEFAULT A TRUE ---
     allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=True)
-    esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", use_container_width=True)
+    esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch")
 
 with col_dx:
     st.markdown("#### 📊 Risultato")
     if esegui and st.session_state.lista_di_carico:
         
         try:
-            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation)
+            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation, camion_w)
         except ValueError as e:
             st.error(f"⛔ {e}")
-            rects_to_draw, max_L = [], CAMION_L + 1
+            rects_to_draw, max_L = [], camion_l + 1
 
-        overflow = max_L > CAMION_L
+        overflow = max_L > camion_l
         ingombro_m = max_L / 100
-        limite_m = CAMION_L / 100
+        limite_m = camion_l / 100
         if overflow:
             card_bg = "#ffe6e6"
             card_border = "#e74c3c"
             card_text = f"⛔ Ingombro: {ingombro_m:.2f} m (Limite {limite_m:.2f} m)"
-            card_sub = "Il carico supera la lunghezza utile del pianale. PDF non generato."
+            card_sub = "Il carico supera la lunghezza utile del veicolo scelto. PDF non generato."
         else:
             card_bg = "#e8ffe6"
             card_border = "#2ecc71"
@@ -464,12 +467,12 @@ with col_dx:
             unsafe_allow_html=True,
         )
 
-        total_h = max(CAMION_L, max_L + 50) + 50
-        fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / CAMION_W)))
+        total_h = max(camion_l, max_L + 50) + 50
+        fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / camion_w)))
         ax_s.set_aspect('equal')
-        ax_s.set_xlim(0, CAMION_W); ax_s.set_ylim(total_h, -50)
-        ax_s.add_patch(patches.Rectangle((0, 0), CAMION_W, CAMION_L, fill=False, edgecolor='#00386A', lw=2))
-        ax_s.text(CAMION_W/2, -25, "CABINA", ha='center', fontweight='bold', color='#00386A', fontsize=5)
+        ax_s.set_xlim(0, camion_w); ax_s.set_ylim(total_h, -50)
+        ax_s.add_patch(patches.Rectangle((0, 0), camion_w, camion_l, fill=False, edgecolor='#00386A', lw=2))
+        ax_s.text(camion_w/2, -25, "CABINA", ha='center', fontweight='bold', color='#00386A', fontsize=5)
         
         gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects_to_draw]))
         mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
@@ -479,18 +482,19 @@ with col_dx:
         ax_s.axis('off')
 
         if not overflow:
-            pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L)
+            pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L, camion_w, camion_l)
             st.download_button(
                 label="📄 SCARICA REPORT PDF",
                 data=pdf_file,
                 file_name="Report_Carico_Vicenza.pdf",
                 mime="application/pdf",
-                use_container_width=True
+                width="stretch"
             )
         
         st.markdown("---")
+        # Mantengo use_container_width=True qui perché plt (il grafico) non accetta width="stretch" come i bottoni
         _, col_m, _ = st.columns([1.5, 2, 1.5])
         with col_m: st.pyplot(fig_s, use_container_width=True)
         
     elif not st.session_state.lista_di_carico:
-        st.info("💡 Aggiungi i bancali a sinistra per visualizzare il piano di carico.")
+        st.info("💡 Aggiungi i bancali a sinistra o importa un file per visualizzare il piano di carico.")
