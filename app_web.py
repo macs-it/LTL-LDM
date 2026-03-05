@@ -375,10 +375,8 @@ with col_sx:
         st.number_input("H (cm)", min_value=1, key="val_h", step=10)
     with c5:
         st.write("")
-        # --- QUI HO AGGIUNTO IL CALLBACK on_change ---
         st.checkbox("Sovr.", key="val_s", on_change=on_sovr_change)
     with c6:
-        # Il box compare solo se val_s è True e userà il valore forzato a 2 dal callback
         if st.session_state.val_s:
             st.number_input("Max liv.", min_value=1, max_value=10, key="val_max_sovr", step=1, help="Livelli massimi per questa riga.")
     
@@ -418,7 +416,8 @@ with col_sx:
             st.session_state.editing_index = None
             st.rerun()
 
-    allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=False)
+    # --- QUI HO IMPOSTATO IL DEFAULT A TRUE ---
+    allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=True)
     esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", use_container_width=True)
 
 with col_dx:
