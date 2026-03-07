@@ -169,9 +169,9 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
         max_L = max([r["y"] + r["h"] for r in rects]) if rects else 0
         return rects, max_L
 
-    def build_group_rects(items):
+    def build_group_rects(items, group_idx, rid_start):
         rect_reqs = []
-        uid = 0
+        next_rid = rid_start
         for item in items:
             g, l, w, h, s, q, max_liv = _normalize_item(item)
             tiers = tiers_per_item(h, s, max_liv)
@@ -180,56 +180,127 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                 pezzi_qui = min(pezzi_rimanenti, tiers)
                 label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
                 pezzi_rimanenti -= pezzi_qui
-                rect_reqs.append({"w": w, "l": l, "rid": f"{g}###{label}###{uid}"})
-                uid += 1
-        return rect_reqs
+                rect_reqs.append(
+                    {
+                        "w": w,
+                        "l": l,
+                        "rid": next_rid,
+                        "gruppo": g,
+                        "group_idx": group_idx,
+                        "label": label,
+                    }
+                )
+                next_rid += 1
+        return rect_reqs, next_rid
 
-    def candidate_orders(rect_reqs):
-        base = list(rect_reqs)
-        yield base
-        yield sorted(base, key=lambda r: r["w"] * r["l"], reverse=True)
-        yield sorted(base, key=lambda r: max(r["w"], r["l"]), reverse=True)
-        yield sorted(base, key=lambda r: min(r["w"], r["l"]), reverse=True)
-        yield sorted(base, key=lambda r: (r["w"] + r["l"]), reverse=True)
+    def candidate_orders(grouped_rect_reqs):
+        # I gruppi restano in ordine scarico; varia solo l'ordine interno dei colli.
+        def concat(groups):
+            merged = []
+            for group in groups:
+                merged.extend(group)
+            return merged
 
-    def pack_in_bin(rect_reqs, bin_w, bin_l):
-        """Unico packing in un solo bin: usa tutto lo spazio in larghezza e lunghezza."""
+        base = [list(group) for group in grouped_rect_reqs]
+        yield concat(base)
+
+        keys = [
+            lambda r: r["w"] * r["l"],
+            lambda r: max(r["w"], r["l"]),
+            lambda r: min(r["w"], r["l"]),
+            lambda r: (r["w"] + r["l"]),
+        ]
+        for key in keys:
+            yield concat([sorted(list(group), key=key, reverse=True) for group in grouped_rect_reqs])
+
+    def score_layout(placed, meta_by_rid):
+        if not placed:
+            return 0, 0
+
+        used_length = max((y + h) for (_b, _x, y, _w, h, _rid) in placed)
+        group_stats = OrderedDict()
+        for (_b, _x, y, _w, h, rid) in placed:
+            meta = meta_by_rid[rid]
+            idx = meta["group_idx"]
+            if idx not in group_stats:
+                group_stats[idx] = {"min_y": y, "max_y_end": y + h, "intervals": [(y, y + h)]}
+            else:
+                group_stats[idx]["min_y"] = min(group_stats[idx]["min_y"], y)
+                group_stats[idx]["max_y_end"] = max(group_stats[idx]["max_y_end"], y + h)
+                group_stats[idx]["intervals"].append((y, y + h))
+
+        overlap_cm = 0
+        inversion_cm = 0
+        max_prev_end = -1
+        max_prev_start = -1
+        for idx in sorted(group_stats.keys()):
+            current_min = group_stats[idx]["min_y"]
+            current_max = group_stats[idx]["max_y_end"]
+            if max_prev_end >= 0:
+                overlap_cm += max(0, max_prev_end - current_min)
+                inversion_cm += max(0, max_prev_start - current_min)
+            max_prev_end = max(max_prev_end, current_max)
+            max_prev_start = max(max_prev_start, current_min)
+
+        extra_segments = 0
+        for stats in group_stats.values():
+            intervals = sorted(stats["intervals"], key=lambda it: it[0])
+            if not intervals:
+                continue
+            segments = 1
+            current_end = intervals[0][1]
+            for start, end in intervals[1:]:
+                if start <= current_end:
+                    current_end = max(current_end, end)
+                else:
+                    segments += 1
+                    current_end = end
+            extra_segments += max(0, segments - 1)
+
+        # Priorita': ordine scarichi e compattazione, poi lunghezza totale.
+        score = used_length + (overlap_cm * 1000) + (inversion_cm * 1200) + (extra_segments * 250)
+        return score, used_length
+
+    def pack_in_bin(grouped_rect_reqs, bin_w, bin_l):
+        """Packing in un solo bin con scoring multi-obiettivo per layout multi-drop."""
         best = None
-        for ordered in candidate_orders(rect_reqs):
+        meta_by_rid = {r["rid"]: r for group in grouped_rect_reqs for r in group}
+        for ordered in candidate_orders(grouped_rect_reqs):
             p = newPacker(rotation=True, sort_algo=SORT_NONE)
             p.add_bin(bin_w, bin_l)
             for r in ordered:
                 p.add_rect(r["w"], r["l"], rid=r["rid"])
             p.pack()
             placed = p.rect_list()
-            if len(placed) != len(rect_reqs):
+            if len(placed) != len(meta_by_rid):
                 continue
-            used_length = max((y + h) for (_b, _x, y, _w, h, _rid) in placed) if placed else 0
-            if best is None or used_length < best["used_length"]:
-                best = {"placed": placed, "used_length": used_length}
+            score, used_length = score_layout(placed, meta_by_rid)
+            if best is None or score < best["score"] or (score == best["score"] and used_length < best["used_length"]):
+                best = {"placed": placed, "used_length": used_length, "score": score}
         if best is None:
             raise ValueError(
                 f"Impossibile posizionare tutti i colli nel pianale {bin_w}x{bin_l}cm "
                 "(verifica dimensioni e che nessun lato superi la larghezza)."
             )
-        return best["placed"], best["used_length"]
+        return best["placed"], best["used_length"], meta_by_rid
 
     gruppi = OrderedDict()
     for item in lista_di_carico:
-        gruppi.setdefault(item[0], []).append(item)
+        g, *_rest = _normalize_item(item)
+        gruppi.setdefault(g, []).append(item)
 
-    # Un solo packing globale: tutti i gruppi nello stesso bin, in ordine di scarico.
-    # Così rectpack usa lo spazio libero a fianco del gruppo precedente.
-    all_rect_reqs = []
-    for _g, items in gruppi.items():
-        all_rect_reqs.extend(build_group_rects(items))
+    grouped_rect_reqs = []
+    next_rid = 0
+    for group_idx, (_g, items) in enumerate(gruppi.items()):
+        rects_group, next_rid = build_group_rects(items, group_idx, next_rid)
+        grouped_rect_reqs.append(rects_group)
 
-    placed, max_L = pack_in_bin(all_rect_reqs, camion_w, camion_l)
+    placed, max_L, meta_by_rid = pack_in_bin(grouped_rect_reqs, camion_w, camion_l)
 
     rects = []
     for (_b, x, y, w, h, rid) in placed:
-        g_e, label, _uid = str(rid).split("###")
-        rects.append({"x": x, "y": y, "w": w, "h": h, "rid": label, "gruppo": g_e})
+        meta = meta_by_rid[rid]
+        rects.append({"x": x, "y": y, "w": w, "h": h, "rid": meta["label"], "gruppo": meta["gruppo"]})
 
     return rects, max_L
 
