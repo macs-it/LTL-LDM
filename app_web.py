@@ -139,6 +139,11 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
         rects = []
         for item in lista_di_carico:
             g, l, w, h, s, q, max_liv = _normalize_item(item)
+            if w > camion_w:
+                raise ValueError(
+                    f"Impossibile posizionare il collo {l}x{w} cm di '{g}' senza rotazione: "
+                    f"larghezza collo ({w} cm) superiore alla larghezza utile ({camion_w} cm)."
+                )
             tiers = tiers_per_item(h, s, max_liv)
             pezzi_rimanenti = q
 
