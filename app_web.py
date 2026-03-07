@@ -129,7 +129,7 @@ def annulla_modifica():
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
-def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w):
+def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
     def tiers_per_item(h, sovrapponibile, max_livello_riga):
         if not sovrapponibile:
             return 1
@@ -187,39 +187,45 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w):
         yield sorted(base, key=lambda r: min(r["w"], r["l"]), reverse=True)
         yield sorted(base, key=lambda r: (r["w"] + r["l"]), reverse=True)
 
-    def pack_one_group(rect_reqs):
+    def pack_in_bin(rect_reqs, bin_w, bin_l):
+        """Unico packing in un solo bin: usa tutto lo spazio in larghezza e lunghezza."""
         best = None
         for ordered in candidate_orders(rect_reqs):
             p = newPacker(rotation=True, sort_algo=SORT_NONE)
-            p.add_bin(camion_w, 20000)
+            p.add_bin(bin_w, bin_l)
             for r in ordered:
                 p.add_rect(r["w"], r["l"], rid=r["rid"])
             p.pack()
             placed = p.rect_list()
             if len(placed) != len(rect_reqs):
                 continue
-            group_len = max((y + h) for (_b, _x, y, _w, h, _rid) in placed) if placed else 0
-            if best is None or group_len < best["group_len"]:
-                best = {"placed": placed, "group_len": group_len}
+            used_length = max((y + h) for (_b, _x, y, _w, h, _rid) in placed) if placed else 0
+            if best is None or used_length < best["used_length"]:
+                best = {"placed": placed, "used_length": used_length}
         if best is None:
-            raise ValueError(f"Impossibile posizionare tutti i colli (verifica che la larghezza W non superi i {camion_w}cm).")
-        return best["placed"], best["group_len"]
+            raise ValueError(
+                f"Impossibile posizionare tutti i colli nel pianale {bin_w}x{bin_l}cm "
+                "(verifica dimensioni e che nessun lato superi la larghezza)."
+            )
+        return best["placed"], best["used_length"]
 
     gruppi = OrderedDict()
     for item in lista_di_carico:
         gruppi.setdefault(item[0], []).append(item)
 
-    rects = []
-    y_offset = 0
-    for g, items in gruppi.items():
-        rect_reqs = build_group_rects(items)
-        placed, group_len = pack_one_group(rect_reqs)
-        for (_b, x, y, w, h, rid) in placed:
-            g_e, label, _uid = str(rid).split("###")
-            rects.append({"x": x, "y": y + y_offset, "w": w, "h": h, "rid": label, "gruppo": g_e})
-        y_offset += group_len
+    # Un solo packing globale: tutti i gruppi nello stesso bin, in ordine di scarico.
+    # Così rectpack usa lo spazio libero a fianco del gruppo precedente.
+    all_rect_reqs = []
+    for _g, items in gruppi.items():
+        all_rect_reqs.extend(build_group_rects(items))
 
-    max_L = y_offset
+    placed, max_L = pack_in_bin(all_rect_reqs, camion_w, camion_l)
+
+    rects = []
+    for (_b, x, y, w, h, rid) in placed:
+        g_e, label, _uid = str(rid).split("###")
+        rects.append({"x": x, "y": y, "w": w, "h": h, "rid": label, "gruppo": g_e})
+
     return rects, max_L
 
 # --- FUNZIONE GENERAZIONE PDF ---
@@ -428,7 +434,7 @@ with col_dx:
     if esegui and st.session_state.lista_di_carico:
         
         try:
-            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation, camion_w)
+            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation, camion_w, camion_l)
         except ValueError as e:
             st.error(f"⛔ {e}")
             rects_to_draw, max_L = [], camion_l + 1
