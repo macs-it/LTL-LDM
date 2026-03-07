@@ -610,7 +610,8 @@ with col_dx:
         st.markdown("---")
         _, col_m, _ = st.columns([1.5, 2, 1.5])
         with col_m:
-            st.pyplot(fig_s, width="stretch")
+            # Qui usiamo use_container_width per aggirare il blocco di pyplot
+            st.pyplot(fig_s, use_container_width=True)
         
     elif not st.session_state.lista_di_carico:
         st.info("💡 Aggiungi i bancali a sinistra o importa un file per visualizzare il piano di carico.")
