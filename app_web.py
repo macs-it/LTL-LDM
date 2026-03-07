@@ -228,8 +228,22 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
 
     return rects, max_L
 
+
+def _ingombro_per_gruppo(rects):
+    """Calcola i metri lineari (estensione in Y) per ogni gruppo. Ritorna OrderedDict gruppo -> metri."""
+    out = OrderedDict()
+    for r in rects:
+        g = r["gruppo"]
+        if g not in out:
+            out[g] = {"min_y": r["y"], "max_y_end": r["y"] + r["h"]}
+        else:
+            out[g]["min_y"] = min(out[g]["min_y"], r["y"])
+            out[g]["max_y_end"] = max(out[g]["max_y_end"], r["y"] + r["h"])
+    return OrderedDict((g, (d["max_y_end"] - d["min_y"]) / 100.0) for g, d in out.items())
+
+
 # --- FUNZIONE GENERAZIONE PDF ---
-def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l):
+def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l, ingombro_per_gruppo=None):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -244,6 +258,10 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l):
     c.setFillColor(colors.black); c.setFont("Helvetica-Bold", 10)
     c.drawString(400, height - 110, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     c.drawString(400, height - 125, f"Ingombro Totale: {ingombro/100:.2f} m (su {camion_l/100:.2f} m)")
+    if ingombro_per_gruppo and len(ingombro_per_gruppo) > 1:
+        per_scarico = " | ".join(f"{g}: {m:.2f} m" for g, m in ingombro_per_gruppo.items())
+        c.setFont("Helvetica", 8)
+        c.drawString(45, height - 140, f"Metri lineari per scarico: {per_scarico}")
 
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4))
     ax_pdf.set_aspect('equal')
@@ -473,6 +491,19 @@ with col_dx:
             unsafe_allow_html=True,
         )
 
+        ingombro_per_gruppo = _ingombro_per_gruppo(rects_to_draw)
+        if ingombro_per_gruppo:
+            if len(ingombro_per_gruppo) > 1:
+                st.markdown("**📐 Metri lineari per scarico:**")
+                cols = st.columns(len(ingombro_per_gruppo))
+                for idx, (g, m) in enumerate(ingombro_per_gruppo.items()):
+                    with cols[idx]:
+                        st.metric(g, f"{m:.2f} m")
+                st.caption(f"Totale mezzo: **{ingombro_m:.2f} m**")
+            else:
+                g, m = next(iter(ingombro_per_gruppo.items()))
+                st.caption(f"📐 {g}: **{m:.2f} m** (totale mezzo: **{ingombro_m:.2f} m**)")
+
         total_h = max(camion_l, max_L + 50) + 50
         fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / camion_w)))
         ax_s.set_aspect('equal')
@@ -488,7 +519,10 @@ with col_dx:
         ax_s.axis('off')
 
         if not overflow:
-            pdf_file = genera_pdf_reportlab(rects_to_draw, st.session_state.lista_di_carico, max_L, camion_w, camion_l)
+            pdf_file = genera_pdf_reportlab(
+                rects_to_draw, st.session_state.lista_di_carico, max_L, camion_w, camion_l,
+                ingombro_per_gruppo=ingombro_per_gruppo
+            )
             st.download_button(
                 label="📄 SCARICA REPORT PDF",
                 data=pdf_file,
