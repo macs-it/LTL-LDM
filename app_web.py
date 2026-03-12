@@ -135,6 +135,61 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
             return 1
         return min(max_livello_riga, max(1, 250 // max(1, h)))
 
+    # Caso speciale: rotazione libera + un solo tipo di pallet (stesso gruppo e stesse misure).
+    # In questo caso è più affidabile e prevedibile usare un riempimento a griglia ottimale invece di rectpack.
+    if allow_rotation and lista_di_carico:
+        normalized = [_normalize_item(item) for item in lista_di_carico]
+        # Chiave senza quantità: stesso gruppo, dimensioni, flag e max livelli
+        keys = {(g, l, w, h, s, max_liv) for (g, l, w, h, s, q, max_liv) in normalized}
+        if len(keys) == 1:
+            g, l, w, h, s, max_liv = next(iter(keys))
+            total_q = sum(q for (_g, _l, _w, _h, _s, q, _max_liv) in normalized)
+
+            best = None
+            for pallet_w, pallet_l in [(w, l), (l, w)]:
+                if pallet_w > camion_w:
+                    continue
+                per_row = camion_w // pallet_w
+                if per_row <= 0:
+                    continue
+                rows = math.ceil(total_q / per_row)
+                used_L = rows * pallet_l
+                if best is None or used_L < best["used_L"]:
+                    best = {
+                        "pallet_w": pallet_w,
+                        "pallet_l": pallet_l,
+                        "per_row": per_row,
+                        "rows": rows,
+                        "used_L": used_L,
+                    }
+
+            if best is not None:
+                rects = []
+                remaining = total_q
+                for row in range(best["rows"]):
+                    for col in range(best["per_row"]):
+                        if remaining <= 0:
+                            break
+                        x = col * best["pallet_w"]
+                        y = row * best["pallet_l"]
+                        # Etichetta mantiene le dimensioni originali LxW
+                        label = f"{l}x{w}"
+                        rects.append(
+                            {
+                                "x": x,
+                                "y": y,
+                                "w": best["pallet_w"],
+                                "h": best["pallet_l"],
+                                "rid": label,
+                                "gruppo": g,
+                            }
+                        )
+                        remaining -= 1
+                    if remaining <= 0:
+                        break
+
+                return rects, best["used_L"]
+
     if not allow_rotation:
         rects = []
         for item in lista_di_carico:
