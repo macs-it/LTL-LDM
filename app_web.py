@@ -21,7 +21,7 @@ PALETTE = ['#3498db', '#e67e22', '#2ecc71', '#9b59b6', '#f1c40f', '#e74c3c', '#1
 MAX_SOVR_LIVELLI_DEFAULT = 2
 
 # --- CONFIGURAZIONE PAGINA WEB ---
-st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide") 
+st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide")
 
 st.markdown("""
     <style>
@@ -136,14 +136,16 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
         return min(max_livello_riga, max(1, 250 // max(1, h)))
 
     # Caso speciale: rotazione libera + un solo tipo di pallet (stesso gruppo e stesse misure).
-    # In questo caso è più affidabile e prevedibile usare un riempimento a griglia ottimale invece di rectpack.
     if allow_rotation and lista_di_carico:
         normalized = [_normalize_item(item) for item in lista_di_carico]
-        # Chiave senza quantità: stesso gruppo, dimensioni, flag e max livelli
         keys = {(g, l, w, h, s, max_liv) for (g, l, w, h, s, q, max_liv) in normalized}
         if len(keys) == 1:
             g, l, w, h, s, max_liv = next(iter(keys))
             total_q = sum(q for (_g, _l, _w, _h, _s, q, _max_liv) in normalized)
+            
+            # --- BUG FIX: calcoliamo quanti livelli fare e quante "impronte a terra" ci servono ---
+            tiers = tiers_per_item(h, s, max_liv)
+            footprints_needed = math.ceil(total_q / tiers)
 
             best = None
             for pallet_w, pallet_l in [(w, l), (l, w)]:
@@ -152,7 +154,8 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                 per_row = camion_w // pallet_w
                 if per_row <= 0:
                     continue
-                rows = math.ceil(total_q / per_row)
+                # Dividiamo le impronte a terra per i bancali per fila
+                rows = math.ceil(footprints_needed / per_row)
                 used_L = rows * pallet_l
                 if best is None or used_L < best["used_L"]:
                     best = {
@@ -172,8 +175,11 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                             break
                         x = col * best["pallet_w"]
                         y = row * best["pallet_l"]
-                        # Etichetta mantiene le dimensioni originali LxW
-                        label = f"{l}x{w}"
+                        
+                        # --- BUG FIX: calcoliamo quanti pezzi impilare su questa singola cella ---
+                        pezzi_qui = min(remaining, tiers)
+                        label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
+                        
                         rects.append(
                             {
                                 "x": x,
@@ -184,7 +190,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                                 "gruppo": g,
                             }
                         )
-                        remaining -= 1
+                        remaining -= pezzi_qui
                     if remaining <= 0:
                         break
 
@@ -249,7 +255,6 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
         return rect_reqs, next_rid
 
     def candidate_orders(grouped_rect_reqs):
-        # I gruppi restano in ordine scarico; varia solo l'ordine interno dei colli.
         def concat(groups):
             merged = []
             for group in groups:
@@ -312,12 +317,10 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                     current_end = end
             extra_segments += max(0, segments - 1)
 
-        # Priorita': ordine scarichi e compattazione, poi lunghezza totale.
         score = used_length + (overlap_cm * 1000) + (inversion_cm * 1200) + (extra_segments * 250)
         return score, used_length
 
     def pack_in_bin(grouped_rect_reqs, bin_w, bin_l):
-        """Packing in un solo bin con scoring multi-obiettivo per layout multi-drop."""
         best = None
         meta_by_rid = {r["rid"]: r for group in grouped_rect_reqs for r in group}
         for ordered in candidate_orders(grouped_rect_reqs):
@@ -359,9 +362,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
 
     return rects, max_L
 
-
 def _ingombro_per_gruppo(rects):
-    """Calcola i metri lineari (estensione in Y) per ogni gruppo. Ritorna OrderedDict gruppo -> metri."""
     out = OrderedDict()
     for r in rects:
         g = r["gruppo"]
@@ -371,7 +372,6 @@ def _ingombro_per_gruppo(rects):
             out[g]["min_y"] = min(out[g]["min_y"], r["y"])
             out[g]["max_y_end"] = max(out[g]["max_y_end"], r["y"] + r["h"])
     return OrderedDict((g, (d["max_y_end"] - d["min_y"]) / 100.0) for g, d in out.items())
-
 
 # --- FUNZIONE GENERAZIONE PDF ---
 def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l, ingombro_per_gruppo=None):
@@ -665,7 +665,6 @@ with col_dx:
         st.markdown("---")
         _, col_m, _ = st.columns([1.5, 2, 1.5])
         with col_m:
-            # Qui usiamo use_container_width per aggirare il blocco di pyplot
             st.pyplot(fig_s, use_container_width=True)
         
     elif not st.session_state.lista_di_carico:
