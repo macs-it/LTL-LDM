@@ -1,3 +1,4 @@
+
 import io
 import math
 from datetime import datetime
@@ -24,58 +25,28 @@ MAX_SOVR_LIVELLI_DEFAULT = 2
 st.set_page_config(page_title="DACHSER Packer - Vicenza", page_icon="🚛", layout="wide")
 
 st.markdown("""
-<style>
-:root {
-  --d-blue: #00386A;
-  --d-blue-2: #005B94;
-  --d-yellow: #FFD100;
-  --bg: #F3F5F7;
-  --card: #FFFFFF;
-  --line: #DDE3E8;
-  --text: #1F2937;
-  --muted: #6B7280;
-}
-.stApp { background: var(--bg); color: var(--text); }
-.block-container { max-width: 1500px; padding-top: 1.2rem; padding-bottom: 2rem; }
-h1, h2, h3, h4, h5, h6 { color: var(--d-blue) !important; }
-.topbar { display:flex; justify-content:space-between; align-items:center; background:var(--d-blue); padding:18px 24px; border-radius:14px; margin-bottom:16px; box-shadow:0 6px 20px rgba(0,56,106,.12); }
-.brand { color:var(--d-yellow); font-size:2.3rem; line-height:1; font-weight:900; letter-spacing:1px; }
-.brand-sub { color:#fff; font-size:.82rem; font-weight:700; letter-spacing:1.5px; margin-top:7px; opacity:.95; }
-.module-block { text-align:right; }
-.module-label { color:#fff; font-size:1.2rem; font-weight:800; letter-spacing:1.3px; }
-.module-sub { color:#DCE8F0; font-size:.8rem; margin-top:4px; }
-.section-spacer { height:10px; }
-.status-card { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; border-radius:12px; border:1px solid var(--line); margin-bottom:12px; }
-.status-card.success { background:#F0FAF2; border-left:5px solid #2E7D32; }
-.status-card.danger { background:#FFF2F2; border-left:5px solid #C62828; }
-.status-kicker { font-size:.68rem; text-transform:uppercase; letter-spacing:1.3px; color:var(--muted); font-weight:800; }
-.status-title { font-size:1.4rem; font-weight:900; color:var(--d-blue); margin-top:2px; }
-.status-sub { font-size:.82rem; color:var(--muted); margin-top:2px; }
-.status-value { font-size:2.15rem; font-weight:900; color:var(--d-blue); }
-.status-value span { font-size:.9rem; font-weight:700; }
-.stop-title { display:flex; align-items:center; gap:8px; font-size:1rem; color:var(--d-blue); }
-.stop-dot, .legend-dot { display:inline-block; width:10px; height:10px; border-radius:50%; }
-.legend-item { display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:.8rem; color:#374151; }
-.empty-result { min-height:420px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; background:#fff; border:1px dashed #C7D0D8; border-radius:14px; padding:42px; }
-.empty-icon { width:58px; height:58px; border-radius:50%; background:#FFF7C7; display:flex; align-items:center; justify-content:center; color:var(--d-blue); font-size:28px; font-weight:900; margin-bottom:14px; }
-.empty-title { color:var(--d-blue); font-size:1.25rem; font-weight:800; }
-.empty-sub { color:var(--muted); max-width:420px; margin-top:6px; font-size:.9rem; line-height:1.5; }
-.stButton > button { border-radius:9px !important; min-height:40px; font-weight:750 !important; border:1px solid #C9D2DA !important; }
-.stButton button[kind="primary"] { background:var(--d-yellow) !important; color:var(--d-blue) !important; border:1px solid #E3B900 !important; }
-[data-testid="stMetricValue"] { color:var(--d-blue); }
-[data-testid="stMetricLabel"] { color:#66727D; }
-</style>
+    <style>
+    .stApp { background-color: #f4f5f7; color: #333333; }
+    h1, h2, h3, h4 { color: #00386A !important; font-weight: 800; }
+    .stButton > button { background-color: white !important; color: #00386A !important; border: 1px solid #00386A !important; font-weight: bold; }
+    .stButton button[kind="primary"] { background-color: #FFD100 !important; color: #00386A !important; border: 2px solid #00386A !important; }
+    </style>
 """, unsafe_allow_html=True)
 
-
+st.markdown("""
+    <div style="background-color:#FFD100; padding:20px; border-radius:10px; text-align:center; margin-bottom:25px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1);">
+        <div style="color:#00386A !important; font-size: 3.5rem; font-weight: 900; letter-spacing: 2px; margin:0; line-height: 1.2;">DACHSER</div>
+        <div style="color:#00386A !important; font-size: 1.5rem; font-weight: 300; letter-spacing: 1px; margin:0; line-height: 1.2;">Intelligent Logistics</div>
+        <hr style="border-top: 2px solid #00386A; width: 30%; margin: 15px auto;">
+        <div style="color:#00386A !important; font-size: 1.1rem; font-weight: 400; margin:0;">Ottimizzatore Carico Pianale Multi-Drop &bull; <b style="color:#00386A !important;">Filiale di Vicenza</b></div>
+    </div>
+""", unsafe_allow_html=True)
 
 # --- GESTIONE STATO ---
 if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
 if 'editing_index' not in st.session_state:
     st.session_state.editing_index = None
-if 'last_result' not in st.session_state:
-    st.session_state.last_result = None
 
 def get_next_scarico_name():
     if not st.session_state.lista_di_carico:
@@ -130,11 +101,9 @@ def aggiungi_voce():
     st.session_state.val_h = 150
     st.session_state.val_s = False
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
-    st.session_state.last_result = None
 
 def elimina_riga(index):
     st.session_state.lista_di_carico.pop(index)
-    st.session_state.last_result = None
     if st.session_state.editing_index == index:
         st.session_state.editing_index = None
     elif st.session_state.editing_index is not None and index < st.session_state.editing_index:
@@ -494,303 +463,210 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l, ingo
 # --- LAYOUT E INTERFACCIA UTENTE ---
 # ==========================================
 
-st.markdown("""
-<div class="topbar">
-  <div class="brand-block">
-    <div class="brand">DACHSER</div>
-    <div class="brand-sub">VICENZA · DISTRIBUTION</div>
-  </div>
-  <div class="module-block">
-    <div class="module-label">LOAD PLANNER</div>
-    <div class="module-sub">Pianificazione carico multi-drop</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+col_sx, col_dx = st.columns([1.2, 1], gap="large")
 
-# ---- CONFIGURAZIONE ----
-with st.container(border=True):
-    st.markdown("#### 🚛 Configurazione veicolo")
-    cfg1, cfg2, cfg3, cfg4 = st.columns([1.25, 1.25, 1.5, 1.5])
-    with cfg1:
-        camion_w = st.number_input("Larghezza utile", min_value=100, max_value=300, value=240, step=5, format="%d cm")
-    with cfg2:
-        camion_l = st.number_input("Lunghezza utile", min_value=200, max_value=2000, value=1360, step=10, format="%d cm")
-    with cfg3:
-        vehicle_type = st.selectbox("Tipo veicolo", ["Bilico standard", "Motrice", "Personalizzato"], index=0)
-    with cfg4:
-        allow_rotation = st.toggle("Ottimizzazione automatica", value=True, help="Consente la rotazione automatica dei colli per cercare un piano migliore.")
+with col_sx:
+    # --- SEZIONE IMPOSTAZIONI CAMION ---
+    with st.expander("🚛 Dimensioni Camion", expanded=False):
+        st.markdown("<small>Modifica le dimensioni utili del pianale. Default: Bilico standard (240x1360 cm).</small>", unsafe_allow_html=True)
+        camion_w = st.number_input("Larghezza utile (cm)", min_value=100, max_value=300, value=240, step=5)
+        camion_l = st.number_input("Lunghezza utile (cm)", min_value=200, max_value=2000, value=1360, step=10)
 
-# ---- KPI INPUT ----
-total_rows = len(st.session_state.lista_di_carico)
-total_qty = sum(_normalize_item(i)[5] for i in st.session_state.lista_di_carico)
-total_groups = len(OrderedDict.fromkeys([_normalize_item(i)[0] for i in st.session_state.lista_di_carico]))
-
-k1, k2, k3, k4 = st.columns(4)
-with k1:
-    st.metric("Scarichi", total_groups)
-with k2:
-    st.metric("Pallet / colli", total_qty)
-with k3:
-    st.metric("Righe carico", total_rows)
-with k4:
-    st.metric("Pianale", f"{camion_l/100:.2f} × {camion_w/100:.2f} m")
-
-st.markdown("<div class='section-spacer'></div>", unsafe_allow_html=True)
-
-col_input, col_result = st.columns([0.92, 1.55], gap="large")
-
-# ==========================================
-# COLONNA INPUT
-# ==========================================
-with col_input:
-    st.markdown("### 📦 Composizione carico")
-
-    with st.container(border=True):
-        st.markdown("**Importazione rapida**")
-        uploaded_file = st.file_uploader("Excel / CSV", type=["csv", "xlsx"], label_visibility="collapsed")
-        st.caption("Colonne previste: Destinazione, Qta, L, W, H, Sovr · Max_Liv opzionale")
+    # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
+    with st.expander("📁 Importa lista da Excel o CSV"):
+        st.markdown("""
+        <small>Il file deve contenere le colonne: <b>Destinazione, Qta, L, W, H, Sovr</b> (opzionale: <b>Max_Liv</b>).<br><br>
+        💡 <b>Sovr:</b> 'si' o '1' se è sovrapponibile, 'no' o '0' se non lo è.<br>
+        💡 <b>Max_Liv:</b> Livelli massimi consentiti per l'impilaggio (se vuoto, usa il default).</small>
+        """, unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Carica file", type=["csv", "xlsx"], label_visibility="collapsed")
+        
         if uploaded_file is not None:
-            if st.button("IMPORTA DATI", width="stretch"):
+            if st.button("📥 CARICA DATI", width="stretch"):
                 try:
-                    if uploaded_file.name.lower().endswith('.csv'):
+                    if uploaded_file.name.endswith('.csv'):
                         df = pd.read_csv(uploaded_file)
                     else:
                         df = pd.read_excel(uploaded_file)
-
-                    imported = 0
+                    
                     for index, row in df.iterrows():
                         g = str(row.get('Destinazione', f'SCARICO {index+1}')).strip().upper()
                         q = int(row.get('Qta', 1))
                         l = int(row.get('L', 120))
                         w = int(row.get('W', 80))
                         h = int(row.get('H', 150))
+                        
                         s_raw = str(row.get('Sovr', 'no')).strip().lower()
-                        s = s_raw in ['si', 'sì', 'yes', 'true', '1']
+                        s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
+                        
                         max_liv_raw = row.get('Max_Liv', MAX_SOVR_LIVELLI_DEFAULT if s else 1)
                         max_liv = int(max_liv_raw) if not pd.isna(max_liv_raw) else (MAX_SOVR_LIVELLI_DEFAULT if s else 1)
-                        if not s:
+                        if not s: 
                             max_liv = 1
+                        
                         st.session_state.lista_di_carico.append((g, l, w, h, s, q, max_liv))
-                        imported += 1
-                    st.session_state.last_result = None
-                    st.success(f"Importate {imported} righe con successo.")
+                    
+                    st.success("Dati importati con successo!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Impossibile importare il file: {e}")
+                    st.error(f"Errore nella lettura del file: controlla che le colonne siano corrette. Dettaglio: {e}")
 
-    with st.container(border=True):
-        st.markdown("**Aggiungi merce**")
-        if st.session_state.editing_index is not None:
-            g, l, w, h, s, q, max_liv = _normalize_item(st.session_state.lista_di_carico[st.session_state.editing_index])
-            st.info(f"Modifica: **{g}** · {q} pz · {l}×{w}×{h} cm")
+    st.markdown("#### 📥 Inserimento Manuale")
 
-        st.text_input("Destinazione / scarico", key="val_g", placeholder="Es. PADOVA")
-        f1, f2 = st.columns(2)
-        with f1:
-            st.number_input("Quantità", min_value=1, key="val_q", step=1)
-            st.number_input("Lunghezza (cm)", min_value=1, key="val_l", step=10)
-        with f2:
-            st.number_input("Larghezza (cm)", min_value=1, key="val_w", step=10)
-            st.number_input("Altezza (cm)", min_value=1, key="val_h", step=10)
-
-        s1, s2 = st.columns([1.25, 1])
-        with s1:
-            st.checkbox("Sovrapponibile", key="val_s", on_change=on_sovr_change)
-        with s2:
-            if st.session_state.val_s:
-                st.number_input("Max livelli", min_value=1, max_value=10, key="val_max_sovr", step=1)
-
-        if st.session_state.editing_index is None:
-            st.button("＋ AGGIUNGI CARICO", on_click=aggiungi_voce, type="primary", width="stretch")
-        else:
-            b1, b2 = st.columns([2, 1])
-            with b1:
-                st.button("SALVA MODIFICA", on_click=aggiungi_voce, type="primary", width="stretch")
-            with b2:
-                st.button("ANNULLA", on_click=annulla_modifica, width="stretch")
+    if st.session_state.editing_index is not None:
+        g, l, w, h, s, q, max_liv = _normalize_item(
+            st.session_state.lista_di_carico[st.session_state.editing_index]
+        )
+        st.warning(
+            f"🟡 **MODIFICA IN CORSO** — stai modificando: {g} | {q} pz | {l}×{w}×{h} cm | "
+            f"Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}"
+        )
+    
+    st.text_input("📍 Destinazione (Scarico)", key="val_g")
+    
+    c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8, 1.0])
+    with c1:
+        st.number_input("📦 Q.tà", min_value=1, key="val_q", step=1)
+    with c2:
+        st.number_input("L (cm)", min_value=1, key="val_l", step=10)
+    with c3:
+        st.number_input("W (cm)", min_value=1, key="val_w", step=10)
+    with c4:
+        st.number_input("H (cm)", min_value=1, key="val_h", step=10)
+    with c5:
+        st.write("")
+        st.checkbox("Sovr.", key="val_s", on_change=on_sovr_change)
+    with c6:
+        if st.session_state.val_s:
+            st.number_input("Max liv.", min_value=1, max_value=10, key="val_max_sovr", step=1, help="Livelli massimi per questa riga.")
+    
+    if st.session_state.editing_index is None:
+        st.button("➕ AGGIUNGI", on_click=aggiungi_voce, width="stretch")
+    else:
+        b1, b2 = st.columns([2, 1])
+        with b1:
+            st.button("✅ SALVA MODIFICA", on_click=aggiungi_voce, type="primary", width="stretch")
+        with b2:
+            st.button("✖️ ANNULLA", on_click=annulla_modifica, width="stretch")
 
     if st.session_state.lista_di_carico:
-        st.markdown("#### Sequenza scarichi")
+        st.markdown("---")
+        
         gruppi_vista = OrderedDict()
         for i, item in enumerate(st.session_state.lista_di_carico):
             gruppi_vista.setdefault(item[0], []).append((i, item))
+            
+        for g, items_gruppo in gruppi_vista.items():
+            st.markdown(f"<h6 style='color:#00386A; margin-top: 15px; margin-bottom: 5px; font-weight:bold;'>📍 {g}</h6>", unsafe_allow_html=True)
+            for i, item in items_gruppo:
+                _, l, w, h, s, q, max_liv = _normalize_item(item)
+                cs1, cs2, cs3 = st.columns([8, 1, 1])
+                with cs1:
+                    if st.session_state.editing_index == i:
+                        st.warning(f"🟡 IN MODIFICA — {q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}")
+                    else:
+                        st.info(f"{q} pz | {l} x {w} x {h} cm | Sovr: {'Sì' if s else 'No'}{f' (max {max_liv})' if s else ''}")
+                with cs2: st.button("✏️", key=f"ed_{i}", on_click=edita_riga, args=(i,))
+                with cs3: st.button("❌", key=f"del_{i}", on_click=elimina_riga, args=(i,))
+        
+        if len(st.session_state.lista_di_carico) > 11:
+            st.warning("⚠️ Hai inserito molti lotti. La tabella nel PDF potrebbe essere tagliata.")
+        if st.button("🗑️ Svuota Tutto"):
+            st.session_state.lista_di_carico.clear()
+            st.session_state.editing_index = None
+            st.rerun()
 
-        palette_ui = ['#FFD100', '#005B94', '#6C63FF', '#2E7D32', '#D97706', '#7C3AED', '#0F766E', '#B91C1C']
-        for gi, (g, items_gruppo) in enumerate(gruppi_vista.items(), start=1):
-            qty_group = sum(_normalize_item(item)[5] for _, item in items_gruppo)
-            color = palette_ui[(gi - 1) % len(palette_ui)]
-            with st.container(border=True):
-                hcol, stat = st.columns([2.2, 1])
-                with hcol:
-                    st.markdown(f"<div class='stop-title'><span class='stop-dot' style='background:{color}'></span><b>{g}</b></div>", unsafe_allow_html=True)
-                    st.caption(f"{len(items_gruppo)} righe · {qty_group} unità")
-                with stat:
-                    st.caption(f"STOP {gi}")
-                for i, item in items_gruppo:
-                    _, l, w, h, s, q, max_liv = _normalize_item(item)
-                    r1, r2, r3 = st.columns([7.2, 1, 1])
-                    with r1:
-                        badge = f"Sovr. max {max_liv}" if s else "Non sovr."
-                        st.caption(f"{q} × {l}×{w}×{h} cm · {badge}")
-                    with r2:
-                        st.button("✎", key=f"ed_{i}", on_click=edita_riga, args=(i,))
-                    with r3:
-                        st.button("×", key=f"del_{i}", on_click=elimina_riga, args=(i,))
+    allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=True)
+    esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch")
 
-        cclear, copt = st.columns([1, 1.5])
-        with cclear:
-            if st.button("SVUOTA CARICO", width="stretch"):
-                st.session_state.lista_di_carico.clear()
-                st.session_state.editing_index = None
-                st.session_state.last_result = None
-                st.rerun()
-        with copt:
-            esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch")
-    else:
-        st.info("Aggiungi la merce oppure importa un file Excel/CSV per costruire il piano di carico.")
-        esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch", disabled=True)
-
-# ==========================================
-# COLONNA RISULTATO
-# ==========================================
-with col_result:
-    st.markdown("### 📊 Piano di carico")
-
+with col_dx:
+    st.markdown("#### 📊 Risultato")
     if esegui and st.session_state.lista_di_carico:
+        
         try:
-            rects_to_draw, max_L = calcola_posizionamento(
-                st.session_state.lista_di_carico, allow_rotation, camion_w, camion_l
-            )
-            st.session_state.last_result = {
-                "rects": rects_to_draw,
-                "max_L": max_L,
-                "camion_w": camion_w,
-                "camion_l": camion_l,
-                "allow_rotation": allow_rotation,
-            }
+            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation, camion_w, camion_l)
         except ValueError as e:
-            st.session_state.last_result = None
             st.error(f"⛔ {e}")
+            rects_to_draw, max_L = [], camion_l + 1
 
-    result = st.session_state.last_result
-    if result and (
-        result["camion_w"] != camion_w
-        or result["camion_l"] != camion_l
-        or result.get("allow_rotation", True) != allow_rotation
-    ):
-        result = None
-
-    if result:
-        rects_to_draw = result["rects"]
-        max_L = result["max_L"]
-        result_camion_w = result["camion_w"]
-        result_camion_l = result["camion_l"]
-        overflow = max_L > result_camion_l
+        overflow = max_L > camion_l
         ingombro_m = max_L / 100
-        limite_m = result_camion_l / 100
-        utilization = min(100, (max_L / result_camion_l) * 100) if result_camion_l else 0
-        margin = max(0, result_camion_l - max_L) / 100
-        ingombro_per_gruppo = _ingombro_per_gruppo(rects_to_draw)
+        limite_m = camion_l / 100
+        if overflow:
+            card_bg = "#ffe6e6"
+            card_border = "#e74c3c"
+            card_text = f"⛔ Ingombro: {ingombro_m:.2f} m (Limite {limite_m:.2f} m)"
+            card_sub = "Il carico supera la lunghezza utile del veicolo scelto. PDF non generato."
+        else:
+            card_bg = "#e8ffe6"
+            card_border = "#2ecc71"
+            card_text = f"✅ Ingombro Totale: {ingombro_m:.2f} m su {limite_m:.2f} m disponibili"
+            card_sub = "Il carico rientra nel pianale."
 
-        status_cls = "danger" if overflow else "success"
-        status_title = "CARICO FUORI SAGOMA" if overflow else "CARICO OTTIMIZZATO"
-        status_sub = (
-            f"Il piano supera la lunghezza utile di {margin:.2f} m."
-            if overflow else
-            f"Spazio residuo disponibile: {margin:.2f} m."
-        )
-        st.markdown(f"""
-        <div class="status-card {status_cls}">
-            <div>
-                <div class="status-kicker">ESITO ELABORAZIONE</div>
-                <div class="status-title">{status_title}</div>
-                <div class="status-sub">{status_sub}</div>
+        st.markdown(
+            f"""
+            <div style="
+                padding: 14px 18px;
+                margin-bottom: 10px;
+                border-radius: 10px;
+                border: 2px solid {card_border};
+                background-color: {card_bg};
+            ">
+                <div style="font-size: 1.6rem; font-weight: 900; color: #00386A; margin-bottom: 4px;">
+                    {card_text}
+                </div>
+                <div style="font-size: 0.9rem; color: #333333;">
+                    {card_sub}
+                </div>
             </div>
-            <div class="status-value">{ingombro_m:.2f}<span> m</span></div>
-        </div>
-        """, unsafe_allow_html=True)
+            """,
+            unsafe_allow_html=True,
+        )
 
-        mk1, mk2, mk3, mk4 = st.columns(4)
-        with mk1:
-            st.metric("Metri lineari", f"{ingombro_m:.2f} m", f"{margin:.2f} m liberi" if not overflow else "oltre limite")
-        with mk2:
-            st.metric("Utilizzo pianale", f"{utilization:.0f}%")
-        with mk3:
-            st.metric("Unità", total_qty)
-        with mk4:
-            st.metric("Scarichi", total_groups)
-
+        ingombro_per_gruppo = _ingombro_per_gruppo(rects_to_draw)
         if ingombro_per_gruppo:
-            st.markdown("#### Metri lineari per scarico")
-            gcols = st.columns(min(4, len(ingombro_per_gruppo)))
-            for idx, (g, m) in enumerate(ingombro_per_gruppo.items()):
-                with gcols[idx % len(gcols)]:
-                    st.metric(g, f"{m:.2f} m")
+            if len(ingombro_per_gruppo) > 1:
+                st.markdown("**📐 Metri lineari per scarico:**")
+                cols = st.columns(len(ingombro_per_gruppo))
+                for idx, (g, m) in enumerate(ingombro_per_gruppo.items()):
+                    with cols[idx]:
+                        st.metric(g, f"{m:.2f} m")
+                st.caption(f"Totale mezzo: **{ingombro_m:.2f} m**")
+            else:
+                g, m = next(iter(ingombro_per_gruppo.items()))
+                st.caption(f"📐 {g}: **{m:.2f} m** (totale mezzo: **{ingombro_m:.2f} m**)")
 
-        # Piano di carico
-        with st.container(border=True):
-            st.markdown("**Vista pianale · cabina in basso**")
-            total_h = max(result_camion_l, max_L + 50) + 50
-            fig_s, ax_s = plt.subplots(figsize=(6.2, max(7.0, 6.2 * (total_h / max(1, result_camion_w)))))
-            ax_s.set_aspect('equal')
-            ax_s.set_xlim(-18, result_camion_w + 18)
-            ax_s.set_ylim(result_camion_l + 25, -35)
-            ax_s.add_patch(patches.Rectangle((0, 0), result_camion_w, result_camion_l, fill=False, edgecolor='#00386A', lw=2.2))
-            ax_s.text(result_camion_w/2, -17, "CABINA", ha='center', va='center', fontweight='bold', color='#00386A', fontsize=9)
-            ax_s.text(result_camion_w + 8, result_camion_l/2, f"{result_camion_l/100:.2f} m", rotation=90, va='center', ha='center', fontsize=7, color='#6b7280')
-
-            gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects_to_draw]))
-            mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
-            for r in rects_to_draw:
-                ax_s.add_patch(patches.Rectangle((r['x'], r['y']), r['w'], r['h'], facecolor=mappa_c[r['gruppo']], edgecolor='white', alpha=0.88, lw=1.0))
-                ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=6.2, fontweight='bold', color='#111827')
-
-            # tacche metriche ogni metro
-            for m in range(1, int(math.ceil(result_camion_l / 100))):
-                y = m * 100
-                ax_s.plot([-5, 0], [y, y], color='#9ca3af', lw=0.6)
-                ax_s.text(-7, y, f"{m}m", fontsize=5.5, color='#6b7280', va='center', ha='right')
-            ax_s.axis('off')
-            st.pyplot(fig_s, use_container_width=True)
-            plt.close(fig_s)
-
-        leg1, leg2 = st.columns([2, 1])
-        with leg1:
-            st.markdown("**Legenda scarichi**")
-            legend_html = " ".join([
-                f"<span class='legend-item'><span class='legend-dot' style='background:{mappa_c[g]}'></span>{g}</span>"
-                for g in gruppi_u
-            ])
-            st.markdown(legend_html, unsafe_allow_html=True)
-        with leg2:
-            st.caption(f"Veicolo: {vehicle_type} · {result_camion_l/100:.2f} × {result_camion_w/100:.2f} m")
+        total_h = max(camion_l, max_L + 50) + 50
+        fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / camion_w)))
+        ax_s.set_aspect('equal')
+        ax_s.set_xlim(0, camion_w); ax_s.set_ylim(total_h, -50)
+        ax_s.add_patch(patches.Rectangle((0, 0), camion_w, camion_l, fill=False, edgecolor='#00386A', lw=2))
+        ax_s.text(camion_w/2, -25, "CABINA", ha='center', fontweight='bold', color='#00386A', fontsize=5)
+        
+        gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects_to_draw]))
+        mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
+        for r in rects_to_draw:
+            ax_s.add_patch(patches.Rectangle((r['x'], r['y']), r['w'], r['h'], facecolor=mappa_c[r['gruppo']], edgecolor='black', alpha=0.8, lw=0.5))
+            ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
+        ax_s.axis('off')
 
         if not overflow:
             pdf_file = genera_pdf_reportlab(
-                rects_to_draw, st.session_state.lista_di_carico, max_L, result_camion_w, result_camion_l,
+                rects_to_draw, st.session_state.lista_di_carico, max_L, camion_w, camion_l,
                 ingombro_per_gruppo=ingombro_per_gruppo
             )
             st.download_button(
-                label="⬇ SCARICA REPORT PDF",
+                label="📄 SCARICA REPORT PDF",
                 data=pdf_file,
-                file_name="Report_Carico_Dachser_Vicenza.pdf",
+                file_name="Report_Carico_Vicenza.pdf",
                 mime="application/pdf",
                 width="stretch"
             )
-    elif st.session_state.lista_di_carico:
-        st.markdown("""
-        <div class="empty-result">
-            <div class="empty-icon">↗</div>
-            <div class="empty-title">Pronto per l'ottimizzazione</div>
-            <div class="empty-sub">Inserisci o importa il carico, poi avvia l'ottimizzazione per generare il piano di carico.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="empty-result">
-            <div class="empty-icon">＋</div>
-            <div class="empty-title">Nessun carico inserito</div>
-            <div class="empty-sub">Aggiungi la merce nella sezione a sinistra per iniziare.</div>
-        </div>
-        """, unsafe_allow_html=True)
-
+        
+        st.markdown("---")
+        _, col_m, _ = st.columns([1.5, 2, 1.5])
+        with col_m:
+            st.pyplot(fig_s, use_container_width=True)
+        
+    elif not st.session_state.lista_di_carico:
+        st.info("💡 Aggiungi i bancali a sinistra o importa un file per visualizzare il piano di carico.")
