@@ -230,10 +230,16 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
                         break
                 return rects, best["used_L"]
 
-    # Senza rotazione ogni scarico viene mantenuto in una fascia longitudinale dedicata.
-    # Questo rende l'ordine di consegna deterministico: ultimo scarico verso la cabina,
-    # primo scarico verso il portellone.
-    if not allow_rotation:
+    # Layout di riferimento SENZA rotazione.
+    # Viene calcolato anche quando la rotazione è consentita: abilitare la rotazione
+    # deve ampliare le possibilità, mai produrre un risultato peggiore di quello
+    # ottenibile lasciando tutti i colli nel loro orientamento originale.
+    def pack_no_rotation_reference():
+        # Se almeno un collo entra soltanto ruotato, il riferimento senza rotazione
+        # non è disponibile.
+        if any(w > camion_w for (_g, _l, w, _h, _s, _q, _max_liv) in normalized_all):
+            return None, None
+
         gruppi_no_rot = OrderedDict()
         for item in lista_di_carico:
             g, *_ = _normalize_item(item)
@@ -242,6 +248,8 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
         rects = []
         offset_y = 0
 
+        # Fasce dedicate agli scarichi: ultimo scarico verso la cabina,
+        # primo scarico verso il portellone.
         for _g, items in reversed(list(gruppi_no_rot.items())):
             local_rects = []
 
@@ -286,6 +294,11 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
 
         return rects, offset_y
 
+    no_rot_rects, no_rot_length = pack_no_rotation_reference()
+
+    if not allow_rotation:
+        return no_rot_rects, no_rot_length
+
     def build_group_rects(items, group_idx, rid_start):
         rect_reqs = []
         next_rid = rid_start
@@ -325,10 +338,13 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
             lambda r: r["w"] * r["l"],
             lambda r: max(r["w"], r["l"]),
             lambda r: min(r["w"], r["l"]),
+            lambda r: r["l"],
+            lambda r: r["w"],
             lambda r: (r["w"] + r["l"]),
         ]
         for key in keys:
             yield concat([sorted(list(group), key=key, reverse=True) for group in base])
+            yield concat([sorted(list(group), key=key, reverse=False) for group in base])
 
     def score_layout(placed, meta_by_rid):
         if not placed:
@@ -387,20 +403,29 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
     def try_pack(grouped_rect_reqs, bin_w, bin_l):
         best = None
         meta_by_rid = {r["rid"]: r for group in grouped_rect_reqs for r in group}
-        for ordered in candidate_orders(grouped_rect_reqs):
-            p = newPacker(rotation=True, sort_algo=SORT_NONE)
-            p.add_bin(bin_w, int(bin_l))
-            for r in ordered:
-                p.add_rect(r["w"], r["l"], rid=r["rid"])
-            p.pack()
-            placed = p.rect_list()
-            if len(placed) != len(meta_by_rid):
-                continue
-            score, used_length = score_layout(placed, meta_by_rid)
-            if best is None or score < best["score"] or (
-                score == best["score"] and used_length < best["used_length"]
-            ):
-                best = {"placed": placed, "used_length": used_length, "score": score}
+        # rectpack è euristico: rotation=True può scegliere orientamenti locali
+        # che rendono il packing peggiore. Per questo proviamo sia con sia senza
+        # rotazione e teniamo la soluzione migliore.
+        for rotation_mode in (True, False):
+            for ordered in candidate_orders(grouped_rect_reqs):
+                p = newPacker(rotation=rotation_mode, sort_algo=SORT_NONE)
+                p.add_bin(bin_w, int(bin_l))
+                for r in ordered:
+                    p.add_rect(r["w"], r["l"], rid=r["rid"])
+                p.pack()
+                placed = p.rect_list()
+                if len(placed) != len(meta_by_rid):
+                    continue
+                score, used_length = score_layout(placed, meta_by_rid)
+                if best is None or score < best["score"] or (
+                    score == best["score"] and used_length < best["used_length"]
+                ):
+                    best = {
+                        "placed": placed,
+                        "used_length": used_length,
+                        "score": score,
+                        "rotation_mode": rotation_mode,
+                    }
         if best is None:
             return None
         best["meta_by_rid"] = meta_by_rid
@@ -420,6 +445,11 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
     # Prima proviamo sul veicolo scelto. Se non entra, allarghiamo SOLO la lunghezza del
     # contenitore di calcolo e cerchiamo la minima lunghezza che consente di posizionare tutto.
     best = try_pack(grouped_rect_reqs, camion_w, camion_l)
+
+    # Se il carico entra già nel riferimento senza rotazione, la spunta
+    # "Ottimizza anche ruotando" non deve mai trasformarlo in overflow.
+    if best is None and no_rot_rects is not None and no_rot_length <= camion_l:
+        return no_rot_rects, no_rot_length
 
     if best is None:
         all_reqs = [r for group in grouped_rect_reqs for r in group]
@@ -441,6 +471,8 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
         upper = max(camion_l + 1, int(sum(sequential_lengths)))
         upper_best = try_pack(grouped_rect_reqs, camion_w, upper)
         if upper_best is None:
+            if no_rot_rects is not None:
+                return no_rot_rects, no_rot_length
             raise ValueError(
                 "Impossibile trovare un posizionamento valido anche estendendo la lunghezza di calcolo. "
                 "Verifica dimensioni, rotazione e dati inseriti."
@@ -470,6 +502,11 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, 
         rects.append(
             {"x": x, "y": y, "w": w, "h": h, "rid": meta["label"], "gruppo": meta["gruppo"]}
         )
+
+    # Confronto finale: se la soluzione senza rotazione è più corta (o uguale),
+    # scegliamo quella. La rotazione è un'opzione in più, non un obbligo.
+    if no_rot_rects is not None and no_rot_length <= max_L:
+        return no_rot_rects, no_rot_length
 
     return rects, max_L
 
