@@ -47,6 +47,12 @@ if 'lista_di_carico' not in st.session_state:
     st.session_state.lista_di_carico = []
 if 'editing_index' not in st.session_state:
     st.session_state.editing_index = None
+if 'last_result' not in st.session_state:
+    st.session_state.last_result = None
+
+def invalidate_result():
+    """Annulla l'ultimo piano quando cambiano dati o parametri di calcolo."""
+    st.session_state.last_result = None
 
 def get_next_scarico_name():
     if not st.session_state.lista_di_carico:
@@ -80,6 +86,7 @@ def on_sovr_change():
 
 # --- FUNZIONI LISTA INTERFACCIA ---
 def aggiungi_voce():
+    invalidate_result()
     voce = (
         st.session_state.val_g.upper(),
         st.session_state.val_l,
@@ -103,6 +110,7 @@ def aggiungi_voce():
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 def elimina_riga(index):
+    invalidate_result()
     st.session_state.lista_di_carico.pop(index)
     if st.session_state.editing_index == index:
         st.session_state.editing_index = None
@@ -130,21 +138,51 @@ def annulla_modifica():
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
 # --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
-def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
+def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, camion_h):
+    """
+    Restituisce (rettangoli, lunghezza_occupata_cm).
+
+    La lunghezza del camion è un limite operativo, non un limite del motore di calcolo:
+    se il carico non entra, il packing viene esteso per stimare la lunghezza realmente necessaria.
+
+    Ordine multi-drop:
+    il primo gruppo inserito è il primo da scaricare e viene quindi favorito verso il portellone;
+    gli scarichi successivi vengono favoriti progressivamente verso la cabina.
+    """
+
     def tiers_per_item(h, sovrapponibile, max_livello_riga):
+        if h > camion_h:
+            raise ValueError(
+                f"Altezza collo {h} cm superiore all'altezza utile del veicolo ({camion_h} cm)."
+            )
         if not sovrapponibile:
             return 1
-        return min(max_livello_riga, max(1, 250 // max(1, h)))
+        return min(max_livello_riga, max(1, camion_h // max(1, h)))
+
+    def validate_width(l, w, gruppo):
+        if allow_rotation:
+            if min(l, w) > camion_w:
+                raise ValueError(
+                    f"Impossibile posizionare il collo {l}x{w} cm di '{gruppo}': "
+                    f"entrambi i lati superano la larghezza utile ({camion_w} cm)."
+                )
+        elif w > camion_w:
+            raise ValueError(
+                f"Impossibile posizionare il collo {l}x{w} cm di '{gruppo}' senza rotazione: "
+                f"larghezza collo ({w} cm) superiore alla larghezza utile ({camion_w} cm)."
+            )
+
+    normalized_all = [_normalize_item(item) for item in lista_di_carico]
+    for g, l, w, h, s, q, max_liv in normalized_all:
+        validate_width(l, w, g)
+        tiers_per_item(h, s, max_liv)
 
     # Caso speciale: rotazione libera + un solo tipo di pallet (stesso gruppo e stesse misure).
     if allow_rotation and lista_di_carico:
-        normalized = [_normalize_item(item) for item in lista_di_carico]
-        keys = {(g, l, w, h, s, max_liv) for (g, l, w, h, s, q, max_liv) in normalized}
+        keys = {(g, l, w, h, s, max_liv) for (g, l, w, h, s, q, max_liv) in normalized_all}
         if len(keys) == 1:
             g, l, w, h, s, max_liv = next(iter(keys))
-            total_q = sum(q for (_g, _l, _w, _h, _s, q, _max_liv) in normalized)
-            
-            # --- BUG FIX: calcoliamo quanti livelli fare e quante "impronte a terra" ci servono ---
+            total_q = sum(q for (_g, _l, _w, _h, _s, q, _max_liv) in normalized_all)
             tiers = tiers_per_item(h, s, max_liv)
             footprints_needed = math.ceil(total_q / tiers)
 
@@ -155,7 +193,6 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                 per_row = camion_w // pallet_w
                 if per_row <= 0:
                     continue
-                # Dividiamo le impronte a terra per i bancali per fila
                 rows = math.ceil(footprints_needed / per_row)
                 used_L = rows * pallet_l
                 if best is None or used_L < best["used_L"]:
@@ -176,11 +213,8 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                             break
                         x = col * best["pallet_w"]
                         y = row * best["pallet_l"]
-                        
-                        # --- BUG FIX: calcoliamo quanti pezzi impilare su questa singola cella ---
                         pezzi_qui = min(remaining, tiers)
                         label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
-                        
                         rects.append(
                             {
                                 "x": x,
@@ -194,42 +228,63 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                         remaining -= pezzi_qui
                     if remaining <= 0:
                         break
-
                 return rects, best["used_L"]
 
+    # Senza rotazione ogni scarico viene mantenuto in una fascia longitudinale dedicata.
+    # Questo rende l'ordine di consegna deterministico: ultimo scarico verso la cabina,
+    # primo scarico verso il portellone.
     if not allow_rotation:
-        rects = []
+        gruppi_no_rot = OrderedDict()
         for item in lista_di_carico:
-            g, l, w, h, s, q, max_liv = _normalize_item(item)
-            if w > camion_w:
-                raise ValueError(
-                    f"Impossibile posizionare il collo {l}x{w} cm di '{g}' senza rotazione: "
-                    f"larghezza collo ({w} cm) superiore alla larghezza utile ({camion_w} cm)."
-                )
-            tiers = tiers_per_item(h, s, max_liv)
-            pezzi_rimanenti = q
+            g, *_ = _normalize_item(item)
+            gruppi_no_rot.setdefault(g, []).append(item)
 
-            for _ in range(math.ceil(q / tiers)):
-                pezzi_qui = min(pezzi_rimanenti, tiers)
-                pezzi_rimanenti -= pezzi_qui
+        rects = []
+        offset_y = 0
 
-                label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
+        for _g, items in reversed(list(gruppi_no_rot.items())):
+            local_rects = []
 
-                best_y = float("inf")
-                best_x = 0
-                xs = sorted(list(set([0] + [r["x"] + r["w"] for r in rects if r["x"] + r["w"] + w <= camion_w])))
-                for x in xs:
-                    max_y = 0
-                    for r in rects:
-                        if x < r["x"] + r["w"] and x + w > r["x"]:
-                            max_y = max(max_y, r["y"] + r["h"])
-                    if max_y < best_y:
-                        best_y, best_x = max_y, x
+            for item in items:
+                g, l, w, h, s, q, max_liv = _normalize_item(item)
+                tiers = tiers_per_item(h, s, max_liv)
+                pezzi_rimanenti = q
 
-                rects.append({"x": best_x, "y": best_y, "w": w, "h": l, "rid": label, "gruppo": g})
+                for _ in range(math.ceil(q / tiers)):
+                    pezzi_qui = min(pezzi_rimanenti, tiers)
+                    pezzi_rimanenti -= pezzi_qui
+                    label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
 
-        max_L = max([r["y"] + r["h"] for r in rects]) if rects else 0
-        return rects, max_L
+                    best_y = float("inf")
+                    best_x = 0
+                    xs = sorted(
+                        set(
+                            [0]
+                            + [
+                                r["x"] + r["w"]
+                                for r in local_rects
+                                if r["x"] + r["w"] + w <= camion_w
+                            ]
+                        )
+                    )
+                    for x in xs:
+                        max_y = 0
+                        for r in local_rects:
+                            if x < r["x"] + r["w"] and x + w > r["x"]:
+                                max_y = max(max_y, r["y"] + r["h"])
+                        if max_y < best_y:
+                            best_y, best_x = max_y, x
+
+                    local_rects.append(
+                        {"x": best_x, "y": best_y, "w": w, "h": l, "rid": label, "gruppo": g}
+                    )
+
+            group_length = max((r["y"] + r["h"] for r in local_rects), default=0)
+            for r in local_rects:
+                rects.append({**r, "y": r["y"] + offset_y})
+            offset_y += group_length
+
+        return rects, offset_y
 
     def build_group_rects(items, group_idx, rid_start):
         rect_reqs = []
@@ -262,7 +317,8 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
                 merged.extend(group)
             return merged
 
-        base = [list(group) for group in grouped_rect_reqs]
+        # Dal lato cabina vogliamo l'ultimo scarico; il primo scarico resta verso il portellone.
+        base = [list(group) for group in reversed(grouped_rect_reqs)]
         yield concat(base)
 
         keys = [
@@ -272,7 +328,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
             lambda r: (r["w"] + r["l"]),
         ]
         for key in keys:
-            yield concat([sorted(list(group), key=key, reverse=True) for group in grouped_rect_reqs])
+            yield concat([sorted(list(group), key=key, reverse=True) for group in base])
 
     def score_layout(placed, meta_by_rid):
         if not placed:
@@ -284,17 +340,23 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
             meta = meta_by_rid[rid]
             idx = meta["group_idx"]
             if idx not in group_stats:
-                group_stats[idx] = {"min_y": y, "max_y_end": y + h, "intervals": [(y, y + h)]}
+                group_stats[idx] = {
+                    "min_y": y,
+                    "max_y_end": y + h,
+                    "intervals": [(y, y + h)],
+                }
             else:
                 group_stats[idx]["min_y"] = min(group_stats[idx]["min_y"], y)
                 group_stats[idx]["max_y_end"] = max(group_stats[idx]["max_y_end"], y + h)
                 group_stats[idx]["intervals"].append((y, y + h))
 
+        # Ordine desiderato da cabina (y piccolo) a portellone (y grande):
+        # ultimo scarico -> ... -> SCARICO 1.
         overlap_cm = 0
         inversion_cm = 0
         max_prev_end = -1
         max_prev_start = -1
-        for idx in sorted(group_stats.keys()):
+        for idx in sorted(group_stats.keys(), reverse=True):
             current_min = group_stats[idx]["min_y"]
             current_max = group_stats[idx]["max_y_end"]
             if max_prev_end >= 0:
@@ -303,6 +365,7 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
             max_prev_end = max(max_prev_end, current_max)
             max_prev_start = max(max_prev_start, current_min)
 
+        # Penalizziamo uno stesso scarico spezzato in molte zone longitudinali.
         extra_segments = 0
         for stats in group_stats.values():
             intervals = sorted(stats["intervals"], key=lambda it: it[0])
@@ -321,12 +384,12 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
         score = used_length + (overlap_cm * 1000) + (inversion_cm * 1200) + (extra_segments * 250)
         return score, used_length
 
-    def pack_in_bin(grouped_rect_reqs, bin_w, bin_l):
+    def try_pack(grouped_rect_reqs, bin_w, bin_l):
         best = None
         meta_by_rid = {r["rid"]: r for group in grouped_rect_reqs for r in group}
         for ordered in candidate_orders(grouped_rect_reqs):
             p = newPacker(rotation=True, sort_algo=SORT_NONE)
-            p.add_bin(bin_w, bin_l)
+            p.add_bin(bin_w, int(bin_l))
             for r in ordered:
                 p.add_rect(r["w"], r["l"], rid=r["rid"])
             p.pack()
@@ -334,14 +397,14 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
             if len(placed) != len(meta_by_rid):
                 continue
             score, used_length = score_layout(placed, meta_by_rid)
-            if best is None or score < best["score"] or (score == best["score"] and used_length < best["used_length"]):
+            if best is None or score < best["score"] or (
+                score == best["score"] and used_length < best["used_length"]
+            ):
                 best = {"placed": placed, "used_length": used_length, "score": score}
         if best is None:
-            raise ValueError(
-                f"Impossibile posizionare tutti i colli nel pianale {bin_w}x{bin_l}cm "
-                "(verifica dimensioni e che nessun lato superi la larghezza)."
-            )
-        return best["placed"], best["used_length"], meta_by_rid
+            return None
+        best["meta_by_rid"] = meta_by_rid
+        return best
 
     gruppi = OrderedDict()
     for item in lista_di_carico:
@@ -354,25 +417,85 @@ def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l):
         rects_group, next_rid = build_group_rects(items, group_idx, next_rid)
         grouped_rect_reqs.append(rects_group)
 
-    placed, max_L, meta_by_rid = pack_in_bin(grouped_rect_reqs, camion_w, camion_l)
+    # Prima proviamo sul veicolo scelto. Se non entra, allarghiamo SOLO la lunghezza del
+    # contenitore di calcolo e cerchiamo la minima lunghezza che consente di posizionare tutto.
+    best = try_pack(grouped_rect_reqs, camion_w, camion_l)
+
+    if best is None:
+        all_reqs = [r for group in grouped_rect_reqs for r in group]
+
+        # Upper bound sicuro: ogni impronta messa in sequenza nella migliore orientazione ammessa.
+        sequential_lengths = []
+        for r in all_reqs:
+            feasible_lengths = []
+            if r["w"] <= camion_w:
+                feasible_lengths.append(r["l"])
+            if r["l"] <= camion_w:
+                feasible_lengths.append(r["w"])
+            if not feasible_lengths:
+                raise ValueError(
+                    f"Il collo {r['l']}x{r['w']} cm di '{r['gruppo']}' non entra nella larghezza utile."
+                )
+            sequential_lengths.append(min(feasible_lengths))
+
+        upper = max(camion_l + 1, int(sum(sequential_lengths)))
+        upper_best = try_pack(grouped_rect_reqs, camion_w, upper)
+        if upper_best is None:
+            raise ValueError(
+                "Impossibile trovare un posizionamento valido anche estendendo la lunghezza di calcolo. "
+                "Verifica dimensioni, rotazione e dati inseriti."
+            )
+
+        lo = camion_l + 1
+        hi = upper
+        best = upper_best
+
+        # Ricerca della minima lunghezza di bin che consente al packing di contenere tutti i colli.
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = try_pack(grouped_rect_reqs, camion_w, mid)
+            if candidate is not None:
+                best = candidate
+                hi = mid - 1
+            else:
+                lo = mid + 1
+
+    placed = best["placed"]
+    max_L = best["used_length"]
+    meta_by_rid = best["meta_by_rid"]
 
     rects = []
     for (_b, x, y, w, h, rid) in placed:
         meta = meta_by_rid[rid]
-        rects.append({"x": x, "y": y, "w": w, "h": h, "rid": meta["label"], "gruppo": meta["gruppo"]})
+        rects.append(
+            {"x": x, "y": y, "w": w, "h": h, "rid": meta["label"], "gruppo": meta["gruppo"]}
+        )
 
     return rects, max_L
 
-def _ingombro_per_gruppo(rects):
-    out = OrderedDict()
+
+def _ingombro_per_gruppo(rects, ordine_gruppi=None):
+    """
+    Somma le fasce longitudinali effettivamente occupate da ciascun gruppo.
+    Eventuali vuoti tra due segmenti dello stesso scarico non vengono conteggiati.
+    """
+    intervalli = OrderedDict()
     for r in rects:
-        g = r["gruppo"]
-        if g not in out:
-            out[g] = {"min_y": r["y"], "max_y_end": r["y"] + r["h"]}
-        else:
-            out[g]["min_y"] = min(out[g]["min_y"], r["y"])
-            out[g]["max_y_end"] = max(out[g]["max_y_end"], r["y"] + r["h"])
-    return OrderedDict((g, (d["max_y_end"] - d["min_y"]) / 100.0) for g, d in out.items())
+        intervalli.setdefault(r["gruppo"], []).append((r["y"], r["y"] + r["h"]))
+
+    valori = {}
+    for g, ints in intervalli.items():
+        merged = []
+        for start, end in sorted(ints, key=lambda it: it[0]):
+            if not merged or start > merged[-1][1]:
+                merged.append([start, end])
+            else:
+                merged[-1][1] = max(merged[-1][1], end)
+        valori[g] = sum(end - start for start, end in merged) / 100.0
+
+    if ordine_gruppi is None:
+        ordine_gruppi = list(intervalli.keys())
+    return OrderedDict((g, valori[g]) for g in ordine_gruppi if g in valori)
 
 # --- FUNZIONE GENERAZIONE PDF ---
 def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l, ingombro_per_gruppo=None):
@@ -393,7 +516,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l, ingo
     if ingombro_per_gruppo and len(ingombro_per_gruppo) > 1:
         per_scarico = " | ".join(f"{g}: {m:.2f} m" for g, m in ingombro_per_gruppo.items())
         c.setFont("Helvetica", 8)
-        c.drawString(45, height - 140, f"Metri lineari per scarico: {per_scarico}")
+        c.drawString(45, height - 140, f"Ingombro longitudinale per scarico: {per_scarico}")
 
     fig_pdf, ax_pdf = plt.subplots(figsize=(10, 4))
     ax_pdf.set_aspect('equal')
@@ -401,7 +524,7 @@ def genera_pdf_reportlab(rects, lista_carico, ingombro, camion_w, camion_l, ingo
     ax_pdf.add_patch(patches.Rectangle((0, 0), camion_l, camion_w, fill=False, edgecolor='#00386A', lw=2))
     ax_pdf.text(-30, camion_w/2, "CABINA", ha='center', va='center', fontweight='bold', color='#00386A', rotation=90)
     
-    gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects]))
+    gruppi_u = list(OrderedDict.fromkeys([_normalize_item(item)[0] for item in lista_carico]))
     mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
     
     for r in rects:
@@ -468,9 +591,27 @@ col_sx, col_dx = st.columns([1.2, 1], gap="large")
 with col_sx:
     # --- SEZIONE IMPOSTAZIONI CAMION ---
     with st.expander("🚛 Dimensioni Camion", expanded=False):
-        st.markdown("<small>Modifica le dimensioni utili del pianale. Default: Bilico standard (240x1360 cm).</small>", unsafe_allow_html=True)
-        camion_w = st.number_input("Larghezza utile (cm)", min_value=100, max_value=300, value=240, step=5)
-        camion_l = st.number_input("Lunghezza utile (cm)", min_value=200, max_value=2000, value=1360, step=10)
+        st.markdown(
+            "<small>Modifica le dimensioni utili. Default bilico: 240 × 1360 × 250 cm. "
+            "L'altezza viene usata anche per calcolare i livelli sovrapponibili.</small>",
+            unsafe_allow_html=True,
+        )
+        dc1, dc2, dc3 = st.columns(3)
+        with dc1:
+            camion_w = st.number_input(
+                "Larghezza (cm)", min_value=100, max_value=300, value=240, step=5,
+                key="camion_w", on_change=invalidate_result
+            )
+        with dc2:
+            camion_l = st.number_input(
+                "Lunghezza (cm)", min_value=200, max_value=3000, value=1360, step=10,
+                key="camion_l", on_change=invalidate_result
+            )
+        with dc3:
+            camion_h = st.number_input(
+                "Altezza (cm)", min_value=100, max_value=400, value=250, step=5,
+                key="camion_h", on_change=invalidate_result
+            )
 
     # --- SEZIONE IMPORTAZIONE EXCEL / CSV ---
     with st.expander("📁 Importa lista da Excel o CSV"):
@@ -489,24 +630,30 @@ with col_sx:
                     else:
                         df = pd.read_excel(uploaded_file)
                     
+                    nuovi_dati = []
                     for index, row in df.iterrows():
                         g = str(row.get('Destinazione', f'SCARICO {index+1}')).strip().upper()
                         q = int(row.get('Qta', 1))
                         l = int(row.get('L', 120))
                         w = int(row.get('W', 80))
                         h = int(row.get('H', 150))
-                        
+
                         s_raw = str(row.get('Sovr', 'no')).strip().lower()
-                        s = True if s_raw in ['si', 'sì', 'yes', 'true', '1'] else False
-                        
+                        s = s_raw in ['si', 'sì', 'yes', 'true', '1']
+
                         max_liv_raw = row.get('Max_Liv', MAX_SOVR_LIVELLI_DEFAULT if s else 1)
                         max_liv = int(max_liv_raw) if not pd.isna(max_liv_raw) else (MAX_SOVR_LIVELLI_DEFAULT if s else 1)
-                        if not s: 
+                        if not s:
                             max_liv = 1
-                        
-                        st.session_state.lista_di_carico.append((g, l, w, h, s, q, max_liv))
-                    
-                    st.success("Dati importati con successo!")
+
+                        nuovi_dati.append((g, l, w, h, s, q, max_liv))
+
+                    # L'importazione sostituisce la lista corrente: premendo due volte non duplica i dati.
+                    st.session_state.lista_di_carico = nuovi_dati
+                    st.session_state.editing_index = None
+                    st.session_state.last_result = None
+                    st.session_state.val_g = get_next_scarico_name()
+                    st.success(f"Importate {len(nuovi_dati)} righe. La lista precedente è stata sostituita.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Errore nella lettura del file: controlla che le colonne siano corrette. Dettaglio: {e}")
@@ -523,6 +670,7 @@ with col_sx:
         )
     
     st.text_input("📍 Destinazione (Scarico)", key="val_g")
+    st.caption("Ordine multi-drop: il primo scarico inserito è il primo da consegnare e viene quindi favorito verso il portellone.")
     
     c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.2, 1.2, 1.2, 0.8, 1.0])
     with c1:
@@ -574,29 +722,64 @@ with col_sx:
         if st.button("🗑️ Svuota Tutto"):
             st.session_state.lista_di_carico.clear()
             st.session_state.editing_index = None
+            st.session_state.last_result = None
+            st.session_state.val_g = "SCARICO 1"
             st.rerun()
 
-    allow_rotation = st.checkbox("🔄 Permetti Rotazione Libera (IA)", value=True)
+    allow_rotation = st.checkbox(
+        "🔄 Ottimizza anche ruotando i colli",
+        value=True,
+        key="allow_rotation",
+        on_change=invalidate_result,
+        help="Consente al motore di ruotare di 90° le impronte a terra quando migliora il piano di carico.",
+    )
     esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch")
 
 with col_dx:
     st.markdown("#### 📊 Risultato")
-    if esegui and st.session_state.lista_di_carico:
-        
-        try:
-            rects_to_draw, max_L = calcola_posizionamento(st.session_state.lista_di_carico, allow_rotation, camion_w, camion_l)
-        except ValueError as e:
-            st.error(f"⛔ {e}")
-            rects_to_draw, max_L = [], camion_l + 1
 
-        overflow = max_L > camion_l
+    if esegui and st.session_state.lista_di_carico:
+        try:
+            rects_to_draw, max_L = calcola_posizionamento(
+                st.session_state.lista_di_carico,
+                allow_rotation,
+                camion_w,
+                camion_l,
+                camion_h,
+            )
+            st.session_state.last_result = {
+                "rects": rects_to_draw,
+                "max_L": max_L,
+                "camion_w": camion_w,
+                "camion_l": camion_l,
+                "camion_h": camion_h,
+                "allow_rotation": allow_rotation,
+            }
+        except ValueError as e:
+            st.session_state.last_result = {"error": str(e)}
+
+    result = st.session_state.last_result
+
+    if result and "error" in result:
+        st.error(f"⛔ {result['error']}")
+
+    elif result:
+        rects_to_draw = result["rects"]
+        max_L = result["max_L"]
+        result_camion_w = result["camion_w"]
+        result_camion_l = result["camion_l"]
+        result_camion_h = result["camion_h"]
+
+        overflow = max_L > result_camion_l
         ingombro_m = max_L / 100
-        limite_m = camion_l / 100
+        limite_m = result_camion_l / 100
+        eccedenza_m = max(0, max_L - result_camion_l) / 100
+
         if overflow:
             card_bg = "#ffe6e6"
             card_border = "#e74c3c"
-            card_text = f"⛔ Ingombro: {ingombro_m:.2f} m (Limite {limite_m:.2f} m)"
-            card_sub = "Il carico supera la lunghezza utile del veicolo scelto. PDF non generato."
+            card_text = f"⛔ Servono {ingombro_m:.2f} m (limite mezzo {limite_m:.2f} m)"
+            card_sub = f"Eccedenza reale stimata: {eccedenza_m:.2f} m. Il piano viene mostrato anche oltre il portellone."
         else:
             card_bg = "#e8ffe6"
             card_border = "#2ecc71"
@@ -623,50 +806,91 @@ with col_dx:
             unsafe_allow_html=True,
         )
 
-        ingombro_per_gruppo = _ingombro_per_gruppo(rects_to_draw)
+        ordine_gruppi = list(
+            OrderedDict.fromkeys([_normalize_item(item)[0] for item in st.session_state.lista_di_carico])
+        )
+        ingombro_per_gruppo = _ingombro_per_gruppo(rects_to_draw, ordine_gruppi=ordine_gruppi)
         if ingombro_per_gruppo:
             if len(ingombro_per_gruppo) > 1:
-                st.markdown("**📐 Metri lineari per scarico:**")
+                st.markdown("**📐 Ingombro longitudinale per scarico:**")
                 cols = st.columns(len(ingombro_per_gruppo))
                 for idx, (g, m) in enumerate(ingombro_per_gruppo.items()):
                     with cols[idx]:
                         st.metric(g, f"{m:.2f} m")
-                st.caption(f"Totale mezzo: **{ingombro_m:.2f} m**")
+                st.caption(
+                    f"Totale mezzo: **{ingombro_m:.2f} m** · per ogni scarico vengono sommate solo le fasce "
+                    "longitudinali effettivamente occupate, senza contare eventuali vuoti tra segmenti."
+                )
             else:
                 g, m = next(iter(ingombro_per_gruppo.items()))
                 st.caption(f"📐 {g}: **{m:.2f} m** (totale mezzo: **{ingombro_m:.2f} m**)")
 
-        total_h = max(camion_l, max_L + 50) + 50
-        fig_s, ax_s = plt.subplots(figsize=(1.2, 1.2 * (total_h / camion_w)))
+        total_h = max(result_camion_l, max_L) + 90
+        fig_height = min(11.5, max(4.5, 1.2 * (total_h / result_camion_w)))
+        fig_s, ax_s = plt.subplots(figsize=(2.2, fig_height))
         ax_s.set_aspect('equal')
-        ax_s.set_xlim(0, camion_w); ax_s.set_ylim(total_h, -50)
-        ax_s.add_patch(patches.Rectangle((0, 0), camion_w, camion_l, fill=False, edgecolor='#00386A', lw=2))
-        ax_s.text(camion_w/2, -25, "CABINA", ha='center', fontweight='bold', color='#00386A', fontsize=5)
-        
-        gruppi_u = list(OrderedDict.fromkeys([r['gruppo'] for r in rects_to_draw]))
+        ax_s.set_xlim(0, result_camion_w)
+        ax_s.set_ylim(total_h, -50)
+        ax_s.add_patch(
+            patches.Rectangle(
+                (0, 0), result_camion_w, result_camion_l,
+                fill=False, edgecolor='#00386A', lw=2
+            )
+        )
+        ax_s.text(
+            result_camion_w / 2, -25, "CABINA",
+            ha='center', fontweight='bold', color='#00386A', fontsize=6
+        )
+        ax_s.text(
+            result_camion_w / 2, result_camion_l + 22, "PORTELLONE",
+            ha='center', va='center', fontweight='bold', color='#00386A', fontsize=6
+        )
+        if overflow:
+            ax_s.axhline(result_camion_l, linestyle='--', linewidth=1)
+
+        gruppi_u = ordine_gruppi
         mappa_c = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(gruppi_u)}
         for r in rects_to_draw:
-            ax_s.add_patch(patches.Rectangle((r['x'], r['y']), r['w'], r['h'], facecolor=mappa_c[r['gruppo']], edgecolor='black', alpha=0.8, lw=0.5))
-            ax_s.text(r['x']+r['w']/2, r['y']+r['h']/2, r['rid'], ha='center', va='center', fontsize=3, fontweight='bold')
+            ax_s.add_patch(
+                patches.Rectangle(
+                    (r['x'], r['y']), r['w'], r['h'],
+                    facecolor=mappa_c[r['gruppo']], edgecolor='black', alpha=0.8, lw=0.5
+                )
+            )
+            ax_s.text(
+                r['x'] + r['w'] / 2,
+                r['y'] + r['h'] / 2,
+                r['rid'],
+                ha='center', va='center', fontsize=4, fontweight='bold'
+            )
         ax_s.axis('off')
 
         if not overflow:
             pdf_file = genera_pdf_reportlab(
-                rects_to_draw, st.session_state.lista_di_carico, max_L, camion_w, camion_l,
-                ingombro_per_gruppo=ingombro_per_gruppo
+                rects_to_draw,
+                st.session_state.lista_di_carico,
+                max_L,
+                result_camion_w,
+                result_camion_l,
+                ingombro_per_gruppo=ingombro_per_gruppo,
             )
             st.download_button(
                 label="📄 SCARICA REPORT PDF",
                 data=pdf_file,
                 file_name="Report_Carico_Vicenza.pdf",
                 mime="application/pdf",
-                width="stretch"
+                width="stretch",
             )
-        
+        else:
+            st.caption("Il PDF operativo resta disabilitato quando il carico supera la lunghezza utile del mezzo.")
+
         st.markdown("---")
-        _, col_m, _ = st.columns([1.5, 2, 1.5])
+        _, col_m, _ = st.columns([1, 2.4, 1])
         with col_m:
             st.pyplot(fig_s, use_container_width=True)
-        
+        plt.close(fig_s)
+
     elif not st.session_state.lista_di_carico:
         st.info("💡 Aggiungi i bancali a sinistra o importa un file per visualizzare il piano di carico.")
+    else:
+        st.info("Premi **OTTIMIZZA PIANALE** per calcolare il carico.")
