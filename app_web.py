@@ -1,3 +1,9 @@
+"""DACHSER Packer Vicenza – Modern UI.
+
+Versione Streamlit con motore Planner 1.0 beta 5 e PDF invariati.
+Le modifiche rispetto alla precedente versione riguardano esclusivamente
+l'interfaccia e la visualizzazione a schermo del pianale.
+"""
 import io
 from datetime import datetime
 from collections import OrderedDict
@@ -121,11 +127,6 @@ def _normalize_item(item):
     else:
         g, l, w, h, s, q, max_liv = item
     return g, l, w, h, s, q, max_liv
-
-# --- COMANDI RAPIDI QUANTITA': solo interfaccia, invariato il motore ---
-def cambia_quantita(delta):
-    """Aggiorna il campo quantità senza scendere sotto un pallet."""
-    st.session_state.val_q = max(1, int(st.session_state.val_q) + delta)
 
 # --- CALLBACK PER LA CASELLA SOVRAPPONIBILE ---
 def on_sovr_change():
@@ -745,16 +746,7 @@ with col_form:
             st.warning(f'MODIFICA IN CORSO · {g} · {q} pz · {l}×{w}×{h} cm · Sovr: {"Sì" if s else "No"}' + (f' (max {max_liv})' if s else ''))
         st.text_input('Destinazione / scarico', key='val_g')
         st.markdown('<div class="packer-help">Il primo scarico è il primo da consegnare: merce favorita verso il portellone.</div>', unsafe_allow_html=True)
-        st.number_input("Quantità pallet",    min_value=1,    key="val_q",    step=1)
-        with q_minus:
-            st.button('−', key='qty_minus', on_click=cambia_quantita, args=(-1,),
-                      disabled=st.session_state.val_q <= 1, width='stretch', help='Diminuisci di un pallet')
-        with q_value:
-            st.number_input('Quantità', min_value=1, key='val_q', step=1,
-                            label_visibility='collapsed')
-        with q_plus:
-            st.button('+', key='qty_plus', on_click=cambia_quantita, args=(1,),
-                      width='stretch', help='Aumenta di un pallet')
+        st.number_input('Quantità pallet', min_value=1, key='val_q', step=1)
         st.markdown('<div class="packer-smallhead">Dimensioni colli (cm)</div>', unsafe_allow_html=True)
         v2,v3,v4 = st.columns(3, gap='small')
         with v2:
@@ -942,3 +934,4 @@ with st.container(border=True):
         st.markdown('<div class="packer-empty"><b>Il disegno del pianale apparirà qui</b>'
                     'La visualizzazione si aggiorna dopo il calcolo e segnala graficamente eventuali eccedenze.'
                     '</div>', unsafe_allow_html=True)
+
