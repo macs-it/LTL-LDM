@@ -1,12 +1,10 @@
 
 import io
-import math
 from datetime import datetime
 from collections import OrderedDict
 
 import streamlit as st
 import pandas as pd
-from rectpack import newPacker, SORT_NONE
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -137,378 +135,325 @@ def annulla_modifica():
     st.session_state.val_s = False
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
 
-# --- FUNZIONE LOGICA DI CALCOLO (IL "CERVELLO") ---
-def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, camion_h):
-    """
-    Restituisce (rettangoli, lunghezza_occupata_cm).
+# --- MOTORE DI CALCOLO: PORTING DAL PLANNER 1.0 BETA 5 NON SSCC ---
+# Il Planner 1.0 beta 5 NON SSCC usa MaxRects/frontier, ordinamenti multipli,
+# beam search e pairing di due livelli. Porting in Python senza dipendenze JS.
+# Per Max_Liv > 2, conserviamo la formazione di pile omogenee della Packer v4.
+# Il risultato è una stima euristica geometrica, non un ottimo globale provato.
 
-    La lunghezza del camion è un limite operativo, non un limite del motore di calcolo:
-    se il carico non entra, il packing viene esteso per stimare la lunghezza realmente necessaria.
+CONFIGS = [(0, 0), (0, 2), (0, 3), (1, 1), (1, 4), (0, 5),
+           (1, 2), (2, 6), (3, 7), (4, 2), (5, 1), (6, 0)]
 
-    Ordine multi-drop:
-    il primo gruppo inserito è il primo da scaricare e viene quindi favorito verso il portellone;
-    gli scarichi successivi vengono favoriti progressivamente verso la cabina.
-    """
 
-    def tiers_per_item(h, sovrapponibile, max_livello_riga):
-        if h > camion_h:
-            raise ValueError(
-                f"Altezza collo {h} cm superiore all'altezza utile del veicolo ({camion_h} cm)."
-            )
-        if not sovrapponibile:
-            return 1
-        return min(max_livello_riga, max(1, camion_h // max(1, h)))
+def _hash(uid, seed):
+    x = ((uid & 0xffffffff) ^ (((seed + 1) * 2654435761) & 0xffffffff)) & 0xffffffff
+    x = (((x ^ (x >> 16)) * 2246822507) & 0xffffffff)
+    return (x ^ (x >> 13)) & 0xffffffff
 
-    def validate_width(l, w, gruppo):
-        if allow_rotation:
-            if min(l, w) > camion_w:
-                raise ValueError(
-                    f"Impossibile posizionare il collo {l}x{w} cm di '{gruppo}': "
-                    f"entrambi i lati superano la larghezza utile ({camion_w} cm)."
-                )
-        elif w > camion_w:
-            raise ValueError(
-                f"Impossibile posizionare il collo {l}x{w} cm di '{gruppo}' senza rotazione: "
-                f"larghezza collo ({w} cm) superiore alla larghezza utile ({camion_w} cm)."
-            )
 
-    normalized_all = [_normalize_item(item) for item in lista_di_carico]
-    for g, l, w, h, s, q, max_liv in normalized_all:
-        validate_width(l, w, g)
-        tiers_per_item(h, s, max_liv)
+def _orientation(p, rotate):
+    l, w = p['length_mm'], p['width_mm']
+    return [(l, w, False)] + ([(w, l, True)] if rotate and l != w else [])
 
-    # Caso speciale: rotazione libera + un solo tipo di pallet (stesso gruppo e stesse misure).
-    if allow_rotation and lista_di_carico:
-        keys = {(g, l, w, h, s, max_liv) for (g, l, w, h, s, q, max_liv) in normalized_all}
-        if len(keys) == 1:
-            g, l, w, h, s, max_liv = next(iter(keys))
-            total_q = sum(q for (_g, _l, _w, _h, _s, q, _max_liv) in normalized_all)
-            tiers = tiers_per_item(h, s, max_liv)
-            footprints_needed = math.ceil(total_q / tiers)
 
-            best = None
-            for pallet_w, pallet_l in [(w, l), (l, w)]:
-                if pallet_w > camion_w:
-                    continue
-                per_row = camion_w // pallet_w
-                if per_row <= 0:
-                    continue
-                rows = math.ceil(footprints_needed / per_row)
-                used_L = rows * pallet_l
-                if best is None or used_L < best["used_L"]:
-                    best = {
-                        "pallet_w": pallet_w,
-                        "pallet_l": pallet_l,
-                        "per_row": per_row,
-                        "rows": rows,
-                        "used_L": used_L,
-                    }
+def _fit(base, top, rotate):
+    return next(((l,w,r) for l,w,r in _orientation(top,rotate)
+                 if l <= base['length_mm'] and w <= base['width_mm']), None)
 
-            if best is not None:
-                rects = []
-                remaining = total_q
-                for row in range(best["rows"]):
-                    for col in range(best["per_row"]):
-                        if remaining <= 0:
-                            break
-                        x = col * best["pallet_w"]
-                        y = row * best["pallet_l"]
-                        pezzi_qui = min(remaining, tiers)
-                        label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
-                        rects.append(
-                            {
-                                "x": x,
-                                "y": y,
-                                "w": best["pallet_w"],
-                                "h": best["pallet_l"],
-                                "rid": label,
-                                "gruppo": g,
-                            }
-                        )
-                        remaining -= pezzi_qui
-                    if remaining <= 0:
-                        break
-                return rects, best["used_L"]
 
-    # Layout di riferimento SENZA rotazione.
-    # Viene calcolato anche quando la rotazione è consentita: abilitare la rotazione
-    # deve ampliare le possibilità, mai produrre un risultato peggiore di quello
-    # ottenibile lasciando tutti i colli nel loro orientamento originale.
-    def pack_no_rotation_reference():
-        # Se almeno un collo entra soltanto ruotato, il riferimento senza rotazione
-        # non è disponibile.
-        if any(w > camion_w for (_g, _l, w, _h, _s, _q, _max_liv) in normalized_all):
-            return None, None
+def _area(p):
+    return p['length_mm'] * p['width_mm']
 
-        gruppi_no_rot = OrderedDict()
-        for item in lista_di_carico:
-            g, *_ = _normalize_item(item)
-            gruppi_no_rot.setdefault(g, []).append(item)
 
-        rects = []
-        offset_y = 0
+def _end(p):
+    return p['x'] + p['length_mm']
 
-        # Fasce dedicate agli scarichi: ultimo scarico verso la cabina,
-        # primo scarico verso il portellone.
-        for _g, items in reversed(list(gruppi_no_rot.items())):
-            local_rects = []
 
-            for item in items:
-                g, l, w, h, s, q, max_liv = _normalize_item(item)
-                tiers = tiers_per_item(h, s, max_liv)
-                pezzi_rimanenti = q
+def _used(placements):
+    return max((_end(p) for p in placements), default=0)
 
-                for _ in range(math.ceil(q / tiers)):
-                    pezzi_qui = min(pezzi_rimanenti, tiers)
-                    pezzi_rimanenti -= pezzi_qui
-                    label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
 
-                    best_y = float("inf")
-                    best_x = 0
-                    xs = sorted(
-                        set(
-                            [0]
-                            + [
-                                r["x"] + r["w"]
-                                for r in local_rects
-                                if r["x"] + r["w"] + w <= camion_w
-                            ]
-                        )
-                    )
-                    for x in xs:
-                        max_y = 0
-                        for r in local_rects:
-                            if x < r["x"] + r["w"] and x + w > r["x"]:
-                                max_y = max(max_y, r["y"] + r["h"])
-                        if max_y < best_y:
-                            best_y, best_x = max_y, x
+def _prune(rects):
+    unique = {(r['x'],r['y'],r['w'],r['h']):r for r in rects if r['w']>0 and r['h']>0}
+    vals = list(unique.values())
+    return [a for i,a in enumerate(vals) if not any(
+        i!=j and a['x']>=b['x'] and a['y']>=b['y'] and
+        a['x']+a['w']<=b['x']+b['w'] and a['y']+a['h']<=b['y']+b['h']
+        for j,b in enumerate(vals))]
 
-                    local_rects.append(
-                        {"x": best_x, "y": best_y, "w": w, "h": l, "rid": label, "gruppo": g}
-                    )
 
-            group_length = max((r["y"] + r["h"] for r in local_rects), default=0)
-            for r in local_rects:
-                rects.append({**r, "y": r["y"] + offset_y})
-            offset_y += group_length
+def _split(f,u):
+    if u['x']>=f['x']+f['w'] or u['x']+u['w']<=f['x'] or u['y']>=f['y']+f['h'] or u['y']+u['h']<=f['y']:
+        return [f]
+    out=[]
+    if u['x']>f['x']: out.append(dict(x=f['x'],y=f['y'],w=u['x']-f['x'],h=f['h']))
+    if u['x']+u['w']<f['x']+f['w']: out.append(dict(x=u['x']+u['w'],y=f['y'],w=f['x']+f['w']-u['x']-u['w'],h=f['h']))
+    if u['y']>f['y']: out.append(dict(x=f['x'],y=f['y'],w=f['w'],h=u['y']-f['y']))
+    if u['y']+u['h']<f['y']+f['h']: out.append(dict(x=f['x'],y=u['y']+u['h'],w=f['w'],h=f['y']+f['h']-u['y']-u['h']))
+    return out
 
-        return rects, offset_y
 
-    no_rot_rects, no_rot_length = pack_no_rotation_reference()
+def _profile(ps,W):
+    ys=sorted({0,W,*[coord for p in ps for coord in (p['y'],p['y']+p['width_mm'])]})
+    out=[]
+    for y,z in zip(ys,ys[1:]):
+        height=z-y
+        x=max((_end(p) for p in ps if p['y']<z and p['y']+p['width_mm']>y),default=0)
+        if out and out[-1]['x']==x: out[-1]['h']+=height
+        else: out.append(dict(y=y,h=height,x=x))
+    return out
 
-    if not allow_rotation:
-        return no_rot_rects, no_rot_length
 
-    def build_group_rects(items, group_idx, rid_start):
-        rect_reqs = []
-        next_rid = rid_start
-        for item in items:
-            g, l, w, h, s, q, max_liv = _normalize_item(item)
-            tiers = tiers_per_item(h, s, max_liv)
-            pezzi_rimanenti = q
-            for _ in range(math.ceil(q / tiers)):
-                pezzi_qui = min(pezzi_rimanenti, tiers)
-                label = f"{l}x{w}\nX{pezzi_qui}" if pezzi_qui > 1 else f"{l}x{w}"
-                pezzi_rimanenti -= pezzi_qui
-                rect_reqs.append(
-                    {
-                        "w": w,
-                        "l": l,
-                        "rid": next_rid,
-                        "gruppo": g,
-                        "group_idx": group_idx,
-                        "label": label,
-                    }
-                )
-                next_rid += 1
-        return rect_reqs, next_rid
+def _frontier(ps,L,W):
+    bands=_profile(ps,W);out=[]
+    for i in range(len(bands)):
+        x=0;h=0
+        for b in bands[i:]:
+            x=max(x,b['x']);h+=b['h']
+            if x<L:out.append(dict(x=x,y=bands[i]['y'],w=L-x,h=h))
+    return _prune(out)
 
-    def candidate_orders(grouped_rect_reqs):
-        def concat(groups):
-            merged = []
-            for group in groups:
-                merged.extend(group)
-            return merged
 
-        # Dal lato cabina vogliamo l'ultimo scarico; il primo scarico resta verso il portellone.
-        base = [list(group) for group in reversed(grouped_rect_reqs)]
-        yield concat(base)
+def _order(items,mode,W,rotate):
+    def min_x(p):return min(l for l,w,_ in _orientation(p,rotate) if w<=W)
+    if mode==0:return sorted(items,key=lambda p:(-max(p['length_mm'],p['width_mm']),-_area(p),p['uid']))
+    if mode==1:return sorted(items,key=lambda p:(-_area(p),-min(p['length_mm'],p['width_mm']),p['uid']))
+    if mode==2:return sorted(items,key=lambda p:(-min_x(p),-_area(p),p['uid']))
+    if mode==3:return sorted(items,key=lambda p:p['uid'])
+    return sorted(items,key=lambda p:(_hash(p['uid'],mode),p['uid']))
 
-        keys = [
-            lambda r: r["w"] * r["l"],
-            lambda r: max(r["w"], r["l"]),
-            lambda r: min(r["w"], r["l"]),
-            lambda r: r["l"],
-            lambda r: r["w"],
-            lambda r: (r["w"] + r["l"]),
-        ]
-        for key in keys:
-            yield concat([sorted(list(group), key=key, reverse=True) for group in base])
-            yield concat([sorted(list(group), key=key, reverse=False) for group in base])
 
-    def score_layout(placed, meta_by_rid):
-        if not placed:
-            return 0, 0
+def _placement(p,x,y,l,w,rot):
+    return dict(uid=p['uid'],document=p['document'],pallet_id=p['pallet_id'],
+                priority=p['priority'],layer=1,x=x,y=y,length_mm=l,width_mm=w,
+                height_mm=p['height_mm'],weight_kg=p['weight_kg'],rotated=rot)
 
-        used_length = max((y + h) for (_b, _x, y, _w, h, _rid) in placed)
-        group_stats = OrderedDict()
-        for (_b, _x, y, _w, h, rid) in placed:
-            meta = meta_by_rid[rid]
-            idx = meta["group_idx"]
-            if idx not in group_stats:
-                group_stats[idx] = {
-                    "min_y": y,
-                    "max_y_end": y + h,
-                    "intervals": [(y, y + h)],
-                }
-            else:
-                group_stats[idx]["min_y"] = min(group_stats[idx]["min_y"], y)
-                group_stats[idx]["max_y_end"] = max(group_stats[idx]["max_y_end"], y + h)
-                group_stats[idx]["intervals"].append((y, y + h))
 
-        # Ordine desiderato da cabina (y piccolo) a portellone (y grande):
-        # ultimo scarico -> ... -> SCARICO 1.
-        overlap_cm = 0
-        inversion_cm = 0
-        max_prev_end = -1
-        max_prev_start = -1
-        for idx in sorted(group_stats.keys(), reverse=True):
-            current_min = group_stats[idx]["min_y"]
-            current_max = group_stats[idx]["max_y_end"]
-            if max_prev_end >= 0:
-                overlap_cm += max(0, max_prev_end - current_min)
-                inversion_cm += max(0, max_prev_start - current_min)
-            max_prev_end = max(max_prev_end, current_max)
-            max_prev_start = max(max_prev_start, current_min)
-
-        # Penalizziamo uno stesso scarico spezzato in molte zone longitudinali.
-        extra_segments = 0
-        for stats in group_stats.values():
-            intervals = sorted(stats["intervals"], key=lambda it: it[0])
-            if not intervals:
-                continue
-            segments = 1
-            current_end = intervals[0][1]
-            for start, end in intervals[1:]:
-                if start <= current_end:
-                    current_end = max(current_end, end)
-                else:
-                    segments += 1
-                    current_end = end
-            extra_segments += max(0, segments - 1)
-
-        score = used_length + (overlap_cm * 1000) + (inversion_cm * 1200) + (extra_segments * 250)
-        return score, used_length
-
-    def try_pack(grouped_rect_reqs, bin_w, bin_l):
-        best = None
-        meta_by_rid = {r["rid"]: r for group in grouped_rect_reqs for r in group}
-        # rectpack è euristico: rotation=True può scegliere orientamenti locali
-        # che rendono il packing peggiore. Per questo proviamo sia con sia senza
-        # rotazione e teniamo la soluzione migliore.
-        for rotation_mode in (True, False):
-            for ordered in candidate_orders(grouped_rect_reqs):
-                p = newPacker(rotation=rotation_mode, sort_algo=SORT_NONE)
-                p.add_bin(bin_w, int(bin_l))
-                for r in ordered:
-                    p.add_rect(r["w"], r["l"], rid=r["rid"])
-                p.pack()
-                placed = p.rect_list()
-                if len(placed) != len(meta_by_rid):
-                    continue
-                score, used_length = score_layout(placed, meta_by_rid)
-                if best is None or score < best["score"] or (
-                    score == best["score"] and used_length < best["used_length"]
-                ):
-                    best = {
-                        "placed": placed,
-                        "used_length": used_length,
-                        "score": score,
-                        "rotation_mode": rotation_mode,
-                    }
+def _place_group(items,prior,inp,config):
+    workL=max(inp['L'],_used(prior)+sum(max(p['length_mm'],p['width_mm']) for p in items))
+    out=list(prior);free=_frontier(prior,workL,inp['W']);mx=_used(prior)
+    for p in _order(items,config[0],inp['W'],inp['rotation']):
+        best=None
+        for f in free:
+            for l,w,rot in _orientation(p,inp['rotation']):
+                if l>f['w'] or w>f['h']:continue
+                sh=min(f['w']-l,f['h']-w);lo=max(f['w']-l,f['h']-w)
+                waste=f['w']*f['h']-l*w;new_end=max(mx,f['x']+l)
+                mode=config[1]
+                if mode==0: score=(f['x'],sh,lo,waste,f['y'])
+                elif mode==1: score=(new_end,f['x'],f['y'],waste)
+                elif mode==2: score=(f['x'],w,f['y'],new_end,waste)
+                elif mode==3: score=(f['x'],l,f['y'],new_end,waste)
+                elif mode==4: score=(f['x'],waste,sh,f['y'])
+                elif mode==5: score=(sh,f['x'],waste,f['y'])
+                elif mode==6: score=(f['x'],f['h']%w,f['y'],new_end)
+                else: score=(f['x'],int(rot),f['y'],new_end)
+                if best is None or score<best[0]:best=(score,f,l,w,rot)
         if best is None:
-            return None
-        best["meta_by_rid"] = meta_by_rid
-        return best
+            opts=sorted(((l,w,r) for l,w,r in _orientation(p,inp['rotation']) if w<=inp['W']),key=lambda o:o[0])
+            if not opts:raise ValueError('Collo non rappresentabile nel pianale')
+            l,w,rot=opts[0];f={'x':mx,'y':0}
+        else:_,f,l,w,rot=best
+        u=dict(x=f['x'],y=f['y'],w=l,h=w)
+        out.append(_placement(p,u['x'],u['y'],l,w,rot));mx=max(mx,u['x']+l)
+        free=_prune([s for cell in free for s in _split(cell,u)])
+    return out
 
-    gruppi = OrderedDict()
-    for item in lista_di_carico:
-        g, *_rest = _normalize_item(item)
-        gruppi.setdefault(g, []).append(item)
 
-    grouped_rect_reqs = []
-    next_rid = 0
-    for group_idx, (_g, items) in enumerate(gruppi.items()):
-        rects_group, next_rid = build_group_rects(items, group_idx, next_rid)
-        grouped_rect_reqs.append(rects_group)
+def _keep_states(states,W,count):
+    unique={}
+    for ps in states:
+        key=tuple((b['y'],b['h'],b['x']) for b in _profile(ps,W))
+        unique.setdefault(key,ps)
+    return sorted(unique.values(),key=lambda ps:(_used(ps),sum(b['h']*b['x'] for b in _profile(ps,W))))[:count]
 
-    # Prima proviamo sul veicolo scelto. Se non entra, allarghiamo SOLO la lunghezza del
-    # contenitore di calcolo e cerchiamo la minima lunghezza che consente di posizionare tutto.
-    best = try_pack(grouped_rect_reqs, camion_w, camion_l)
 
-    # Se il carico entra già nel riferimento senza rotazione, la spunta
-    # "Ottimizza anche ruotando" non deve mai trasformarlo in overflow.
-    if best is None and no_rot_rects is not None and no_rot_length <= camion_l:
-        return no_rot_rects, no_rot_length
+def _pairing_plans(items,inp):
+    plans=[[]];seen={()}
+    if not inp['stacking']:return plans
+    def can_base(p):return p['stack_flag']=='S'
+    edges=[(b,t) for b in items if can_base(b) for t in items
+           if b['uid']!=t['uid'] and b['priority']==t['priority']
+           and not t.get('locked_stack') and b['height_mm']+t['height_mm']<=inp['H']
+           and _fit(b,t,inp['rotation'])]
+    def add(pairs):
+        key=tuple(sorted((b['uid'],t['uid']) for b,t in pairs))
+        if key not in seen:seen.add(key);plans.append(pairs)
+    modes=6 if len(items)>120 else 10
+    for mode in range(modes):
+        def score(edge):
+            b,t=edge;waste=_area(b)-_area(t);same=int(b['document']!=t['document']);scarce=int(can_base(t))
+            if mode==0:return (-_area(t),waste,same,b['uid'],t['uid'])
+            if mode==1:return (scarce,-_area(t),waste,same,b['uid'],t['uid'])
+            if mode==2:return (same,-_area(t),waste,b['uid'],t['uid'])
+            if mode==3:return (waste,-_area(t),b['uid'],t['uid'])
+            if mode==4:return (-min(t['length_mm'],t['width_mm']),scarce,waste,b['uid'],t['uid'])
+            return (-_area(t)*(0.6+0.8*_hash(b['uid']*1009+t['uid'],mode)/4294967296),waste,b['uid'],t['uid'])
+        locked=set();pairs=[]
+        for b,t in sorted(edges,key=score):
+            if b['uid'] in locked or t['uid'] in locked:continue
+            pairs.append((b,t));locked.update((b['uid'],t['uid']))
+        add(pairs)
+    if len(items)<=7 and edges:
+        def visit(rest,pairs):
+            if len(plans)>=100:return
+            if not rest:add(pairs);return
+            a=rest[0];tail=rest[1:]
+            for j,z in enumerate(tail):
+                for b,t in ((a,z),(z,a)):
+                    if not can_base(b) or b['priority']!=t['priority'] or t.get('locked_stack') or b['height_mm']+t['height_mm']>inp['H'] or not _fit(b,t,inp['rotation']):continue
+                    visit([v for k,v in enumerate(tail) if k!=j],pairs+[(b,t)])
+            visit(tail,pairs)
+        visit(items,[])
+    else:
+        for p in plans[1:4].copy():
+            for i in range(min(len(p),4)):add([v for j,v in enumerate(p) if i!=j])
+    return plans
 
-    if best is None:
-        all_reqs = [r for group in grouped_rect_reqs for r in group]
 
-        # Upper bound sicuro: ogni impronta messa in sequenza nella migliore orientazione ammessa.
-        sequential_lengths = []
-        for r in all_reqs:
-            feasible_lengths = []
-            if r["w"] <= camion_w:
-                feasible_lengths.append(r["l"])
-            if r["l"] <= camion_w:
-                feasible_lengths.append(r["w"])
-            if not feasible_lengths:
-                raise ValueError(
-                    f"Il collo {r['l']}x{r['w']} cm di '{r['gruppo']}' non entra nella larghezza utile."
-                )
-            sequential_lengths.append(min(feasible_lengths))
+def _floor_search(items,pairs,inp):
+    tops={t['uid'] for b,t in pairs};floor=[p for p in items if p['uid'] not in tops]
+    priorities=sorted({p['priority'] for p in floor},reverse=True)
+    states=[[]];large=len(items)>120
+    for priority in priorities:
+        group=[p for p in floor if p['priority']==priority]
+        next_states=[_place_group(group,prior,inp,config)
+                     for prior in states for config in CONFIGS[:8 if large else 12]]
+        states=_keep_states(next_states,inp['W'],3 if large else 6)
+    return states[0]
 
-        upper = max(camion_l + 1, int(sum(sequential_lengths)))
-        upper_best = try_pack(grouped_rect_reqs, camion_w, upper)
-        if upper_best is None:
-            if no_rot_rects is not None:
-                return no_rot_rects, no_rot_length
-            raise ValueError(
-                "Impossibile trovare un posizionamento valido anche estendendo la lunghezza di calcolo. "
-                "Verifica dimensioni, rotazione e dati inseriti."
-            )
 
-        lo = camion_l + 1
-        hi = upper
-        best = upper_best
+def _assemble(inp,ps,pairs,original):
+    placements=list(ps);by_uid={p['uid']:p for p in ps}
+    for b,t in pairs:
+        base=by_uid.get(b['uid']);o=base and _fit(base,t,inp['rotation'])
+        if not o:raise ValueError('Coppia sovrapposta senza base orientata compatibile')
+        l,w,rot=o
+        v=_placement(t,base['x']+(base['length_mm']-l)//2,base['y']+(base['width_mm']-w)//2,l,w,rot)
+        v.update(layer=2,base_uid=b['uid']);placements.append(v)
+    placements.sort(key=lambda p:(p['layer'],p['x'],p['y'],p['uid']))
+    length=_used(ps)
+    return dict(placements=placements,length=length,layer1=len(ps),layer2=len(pairs),search_candidates=0)
 
-        # Ricerca della minima lunghezza di bin che consente al packing di contenere tutti i colli.
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            candidate = try_pack(grouped_rect_reqs, camion_w, mid)
-            if candidate is not None:
-                best = candidate
-                hi = mid - 1
-            else:
-                lo = mid + 1
 
-    placed = best["placed"]
-    max_L = best["used_length"]
-    meta_by_rid = best["meta_by_rid"]
+def _validate(inp,result,source):
+    ps=result['placements'];floor=[p for p in ps if p['layer']==1]
+    if len(ps)!=len(source) or len({p['uid'] for p in ps})!=len(source):raise ValueError('Inventario pallet incoerente')
+    orig={p['uid']:p for p in source};bases={p['uid']:p for p in floor};used_bases=set()
+    for p in ps:
+        s=orig[p['uid']]
+        if p['x']<0 or p['y']<0 or p['y']+p['width_mm']>inp['W'] or p['height_mm']!=s['height_mm']:
+            raise ValueError('Collo fuori limite o dimensioni non coerenti')
+        if (p['length_mm'],p['width_mm'],p['rotated']) not in _orientation(s,inp['rotation']):
+            raise ValueError('Rotazione non consentita')
+        if p['layer']==2:
+            b=bases.get(p.get('base_uid'))
+            if not inp['stacking'] or b is None or b['uid'] in used_bases:
+                raise ValueError('Base impilamento non valida')
+            used_bases.add(b['uid'])
+            if p['priority']!=b['priority'] or p['x']<b['x'] or p['y']<b['y'] or _end(p)>_end(b) or p['y']+p['width_mm']>b['y']+b['width_mm'] or p['height_mm']+b['height_mm']>inp['H']:
+                raise ValueError('Coppia impilamento non valida')
+            if orig[b['uid']]['stack_flag']!='S' or s.get('locked_stack'):
+                raise ValueError('Impilamento non autorizzato')
+    for i,a in enumerate(floor):
+        for b in floor[i+1:]:
+            lateral=a['y']<b['y']+b['width_mm'] and a['y']+a['width_mm']>b['y']
+            if lateral and a['x']<_end(b) and _end(a)>b['x']:
+                raise ValueError('Colli a pavimento intersecati')
+            if lateral and ((a['priority']>b['priority'] and _end(a)>b['x']) or (b['priority']>a['priority'] and _end(b)>a['x'])):
+                raise ValueError('Ordine degli scarichi non rispettato')
+    if result['length']!=_used(floor):raise ValueError('Metri lineari incoerenti')
 
-    rects = []
-    for (_b, x, y, w, h, rid) in placed:
-        meta = meta_by_rid[rid]
-        rects.append(
-            {"x": x, "y": y, "w": w, "h": h, "rid": meta["label"], "gruppo": meta["gruppo"]}
-        )
 
-    # Confronto finale: se la soluzione senza rotazione è più corta (o uguale),
-    # scegliamo quella. La rotazione è un'opzione in più, non un obbligo.
-    if no_rot_rects is not None and no_rot_length <= max_L:
-        return no_rot_rects, no_rot_length
+def solve_beta5(inp):
+    """Ricerca beta 5: coppie, MaxRects frontier, ordinamenti, beam search, verifica geometrica."""
+    W,H=inp['W'],inp['H']
+    for p in inp['items']:
+        if p['height_mm']>H:raise ValueError(f"Altezza collo {p['height_mm']/10:g} cm superiore al camion ({H/10:g} cm)")
+        if not any(w<=W for l,w,r in _orientation(p,inp['rotation'])):
+            raise ValueError(f"Il collo {p['label']} di '{p['document']}' supera la larghezza utile ({W/10:g} cm)")
+    items=sorted(inp['items'],key=lambda p:(-p['priority'],p['uid']))
+    plans=_pairing_plans(items,inp)
+    # Incumbent veloce, come nell'originale beta 5.
+    floor=[]
+    for priority in sorted({p['priority'] for p in items},reverse=True):
+        group=[p for p in items if p['priority']==priority]
+        floor=_keep_states([_place_group(group,floor,inp,c) for c in CONFIGS[:3]],W,1)[0]
+    best=_assemble(inp,floor,[],items);_validate(inp,best,items)
+    attempts=0
+    for pairs in plans:
+        try:
+            floor=_floor_search(items,pairs,inp)
+            candidate=_assemble(inp,floor,pairs,items)
+            _validate(inp,candidate,items)
+        except ValueError:
+            continue
+        attempts+=1
+        if (candidate['length'],-candidate['layer2']) < (best['length'],-best['layer2']):
+            best=candidate
+    best['search_candidates']=attempts
+    _validate(inp,best,items)
+    return best
 
-    return rects, max_L
+
+def build_packing_input(lista_di_carico,camion_w,camion_l,camion_h,rotation,normalize_item):
+    groups=list(OrderedDict.fromkeys(normalize_item(it)[0] for it in lista_di_carico))
+    items=[];uid=0
+    for row,item in enumerate(lista_di_carico):
+        g,l,w,h,s,q,maxlev=normalize_item(item)
+        if min(l,w,h,q,maxlev)<=0:raise ValueError(f'Valori non validi alla riga {row+1}')
+        if not s: maxlev=1
+        if h>camion_h:raise ValueError(f'Altezza {h} cm superiore all’altezza utile ({camion_h} cm)')
+        tiers=min(maxlev,camion_h//h) if s else 1
+        # Oltre i 2 livelli (non previsti dal motore JS), si formano le pile omogenee della v4.
+        # Con max 2 si passa ogni pallet al pairing originale beta 5.
+        chunks=[]
+        if tiers>2:
+            remaining=q
+            while remaining:
+                n=min(tiers,remaining);chunks.append(n);remaining-=n
+        else:chunks=[1]*q
+        for n in chunks:
+            label=f'{l}x{w}'+(f'\nX{n}' if n>1 else '')
+            items.append(dict(uid=uid,document=g,pallet_id=f'{row+1}-{uid+1}',priority=groups.index(g)+1,
+                              length_mm=l*10,width_mm=w*10,height_mm=h*n*10,weight_kg=0,
+                              stack_flag='S' if s and tiers==2 else 'N',locked_stack=n>1,
+                              physical_count=n,label=label,original_dimensions=f'{l}x{w}'))
+            uid+=1
+    return dict(items=items,markers={},L=camion_l*10,W=camion_w*10,H=camion_h*10,
+                rotation=rotation,stacking=True)
+
+
+def layout_from_result(result,inp):
+    source={p['uid']:p for p in inp['items']}
+    tops={p['base_uid']:p for p in result['placements'] if p['layer']==2}
+    rects=[]
+    for p in result['placements']:
+        if p['layer']!=1:continue
+        s=source[p['uid']];top=tops.get(p['uid'])
+        if top:
+            t=source[top['uid']]
+            label=(f"{s['original_dimensions']}\nX2" if s['original_dimensions']==t['original_dimensions']
+                   else f"{s['original_dimensions']}\n+ {t['original_dimensions']}")
+        else:label=s['label']
+        rects.append(dict(x=p['y']//10,y=p['x']//10,w=p['width_mm']//10,h=p['length_mm']//10,
+                          rid=label,gruppo=s['document'],rotated=p['rotated']))
+    return rects,result['length']//10
+
+
+def calcola_posizionamento(lista_di_carico, allow_rotation, camion_w, camion_l, camion_h):
+    inp=build_packing_input(lista_di_carico,camion_w,camion_l,camion_h,allow_rotation,_normalize_item)
+    candidate=solve_beta5(inp)
+    rects,length=layout_from_result(candidate,inp)
+    if allow_rotation:
+        reference=dict(inp,rotation=False)
+        try:
+            baseline=solve_beta5(reference)
+            b_rects,b_length=layout_from_result(baseline,reference)
+            if b_length<=length:return b_rects,b_length
+        except ValueError:
+            pass
+    return rects,length
 
 
 def _ingombro_per_gruppo(rects, ordine_gruppi=None):
@@ -764,16 +709,16 @@ with col_sx:
             st.rerun()
 
     allow_rotation = st.checkbox(
-        "🔄 Ottimizza anche ruotando i colli",
+        "🔄 Consenti rotazione 90° se riduce i metri lineari",
         value=True,
         key="allow_rotation",
         on_change=invalidate_result,
-        help="Consente al motore di ruotare di 90° le impronte a terra quando migliora il piano di carico.",
+        help="Motore Planner beta 5: prova orientamenti a 0° e 90° e confronta anche il risultato senza rotazione. Ricerca euristica, non ottimo matematico garantito.",
     )
     esegui = st.button("⚡ OTTIMIZZA PIANALE", type="primary", width="stretch")
 
 with col_dx:
-    st.markdown("#### 📊 Risultato")
+    st.markdown("#### 📊 Risultato · motore Planner 1.0 beta 5")
 
     if esegui and st.session_state.lista_di_carico:
         try:
@@ -784,6 +729,21 @@ with col_dx:
                 camion_l,
                 camion_h,
             )
+
+            baseline_no_rotation = None
+            if allow_rotation:
+                try:
+                    _baseline_rects, baseline_no_rotation = calcola_posizionamento(
+                        st.session_state.lista_di_carico,
+                        False,
+                        camion_w,
+                        camion_l,
+                        camion_h,
+                    )
+                except ValueError:
+                    # Alcuni colli possono entrare solo se ruotati.
+                    baseline_no_rotation = None
+
             st.session_state.last_result = {
                 "rects": rects_to_draw,
                 "max_L": max_L,
@@ -791,6 +751,7 @@ with col_dx:
                 "camion_l": camion_l,
                 "camion_h": camion_h,
                 "allow_rotation": allow_rotation,
+                "baseline_no_rotation": baseline_no_rotation,
             }
         except ValueError as e:
             st.session_state.last_result = {"error": str(e)}
@@ -821,7 +782,7 @@ with col_dx:
             card_bg = "#e8ffe6"
             card_border = "#2ecc71"
             card_text = f"✅ Ingombro Totale: {ingombro_m:.2f} m su {limite_m:.2f} m disponibili"
-            card_sub = "Il carico rientra nel pianale."
+            card_sub = "Il carico rientra nel pianale (stima euristica verificata)."
 
         st.markdown(
             f"""
@@ -842,6 +803,23 @@ with col_dx:
             """,
             unsafe_allow_html=True,
         )
+
+        if result.get("allow_rotation"):
+            baseline_no_rotation = result.get("baseline_no_rotation")
+            if baseline_no_rotation is None:
+                st.caption("🔄 Rotazione necessaria: almeno un collo non è caricabile nell'orientamento originale.")
+            else:
+                risparmio_cm = baseline_no_rotation - max_L
+                if risparmio_cm >= 1:
+                    st.success(
+                        f"🔄 Rotazione utile: senza rotazione {baseline_no_rotation/100:.2f} m → "
+                        f"con rotazione {max_L/100:.2f} m. Risparmio: {risparmio_cm/100:.2f} m."
+                    )
+                else:
+                    st.caption(
+                        f"🔄 Rotazione consentita, ma per questo carico non riduce l'ingombro "
+                        f"({baseline_no_rotation/100:.2f} m in entrambi i casi)."
+                    )
 
         ordine_gruppi = list(
             OrderedDict.fromkeys([_normalize_item(item)[0] for item in st.session_state.lista_di_carico])
