@@ -745,8 +745,12 @@ with col_form:
             st.warning(f'MODIFICA IN CORSO · {g} · {q} pz · {l}×{w}×{h} cm · Sovr: {"Sì" if s else "No"}' + (f' (max {max_liv})' if s else ''))
         st.text_input('Destinazione / scarico', key='val_g')
         st.markdown('<div class="packer-help">Il primo scarico è il primo da consegnare: merce favorita verso il portellone.</div>', unsafe_allow_html=True)
-        st.markdown('<div class="packer-smallhead">Quantità pallet</div>', unsafe_allow_html=True)
-        q_minus, q_value, q_plus, q_space = st.columns([.7, 1.5, .7, 2.6], gap='small', vertical_alignment='center')
+st.number_input(
+    "Quantità pallet",
+    min_value=1,
+    key="val_q",
+    step=1
+)
         with q_minus:
             st.button('−', key='qty_minus', on_click=cambia_quantita, args=(-1,),
                       disabled=st.session_state.val_q <= 1, width='stretch', help='Diminuisci di un pallet')
