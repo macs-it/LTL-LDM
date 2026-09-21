@@ -1,8 +1,8 @@
 """DACHSER Packer Vicenza – Modern UI.
 
 Versione Streamlit con motore Planner 1.0 beta 5 e PDF invariati.
-Le modifiche rispetto alla precedente versione riguardano esclusivamente
-l'interfaccia e la visualizzazione a schermo del pianale.
+Layout compatto per Full HD: azione di ottimizzazione sempre prima dell'inventario,
+inventario affiancato all'inserimento, planimetria in basso.
 """
 import io
 from datetime import datetime
@@ -33,19 +33,21 @@ st.markdown("""
 :root { --navy:#002855; --navy2:#073965; --yellow:#ffd100; --ink:#12253d; --muted:#66778c; --line:#dce5ef; --canvas:#f3f6fa; }
 .stApp, [data-testid="stAppViewContainer"] { background:var(--canvas); color:var(--ink); }
 [data-testid="stHeader"] { background:transparent; }
-.block-container { max-width:1600px; padding-top:1.55rem; padding-bottom:3.8rem; }
+.block-container { max-width:1780px; padding-top:.8rem; padding-bottom:2.4rem; }
+div[data-testid="stVerticalBlock"] { gap:.60rem; }
+div[data-testid="stHorizontalBlock"] { gap:.75rem; }
 #MainMenu { visibility:hidden; }
 h1,h2,h3,h4,h5 { color:var(--ink); }
 p { line-height:1.42; }
-.packer-hero { background:linear-gradient(118deg,#002855 0%,#073965 73%,#0a4773 100%); color:white; border-radius:17px; padding:18px 23px; display:flex; align-items:center; justify-content:space-between; gap:16px; box-shadow:0 9px 22px rgba(0,40,85,.12); border-bottom:4px solid var(--yellow); margin-bottom:18px; }
-.packer-brand { font-size:26px; font-weight:900; color:var(--yellow); letter-spacing:.045em; line-height:1; }
-.packer-subtitle { color:#c5d7ea; font-size:11px; letter-spacing:.12em; font-weight:700; text-transform:uppercase; margin-top:8px; }
+.packer-hero { background:linear-gradient(118deg,#002855 0%,#073965 73%,#0a4773 100%); color:white; border-radius:13px; padding:10px 18px; display:flex; align-items:center; justify-content:space-between; gap:16px; box-shadow:0 9px 22px rgba(0,40,85,.12); border-bottom:3px solid var(--yellow); margin-bottom:8px; }
+.packer-brand { font-size:23px; font-weight:900; color:var(--yellow); letter-spacing:.045em; line-height:1; }
+.packer-subtitle { color:#c5d7ea; font-size:10px; letter-spacing:.12em; font-weight:700; text-transform:uppercase; margin-top:8px; }
 .packer-hero-right { text-align:right; }
-.packer-app { font-size:18px; font-weight:850; color:#fff; letter-spacing:.015em; }
+.packer-app { font-size:16px; font-weight:850; color:#fff; letter-spacing:.015em; }
 .packer-version { font-size:11px; color:#c5d7ea; margin-top:4px; }
 .section-label { color:#66809a; font-size:10px; letter-spacing:.14em; font-weight:850; margin-bottom:3px; text-transform:uppercase; }
-.section-title { color:#002855; font-size:19px; font-weight:850; letter-spacing:-.025em; line-height:1.26; margin-bottom:11px; }
-.panel-intro { color:#60758b; font-size:12px; margin-bottom:7px; }
+.section-title { color:#002855; font-size:17px; font-weight:850; letter-spacing:-.025em; line-height:1.2; margin-bottom:6px; }
+.panel-intro { color:#60758b; font-size:11px; margin-bottom:3px; }
 [data-testid="stVerticalBlockBorderWrapper"] { background:#fff; border-color:var(--line) !important; border-radius:14px !important; box-shadow:0 2px 11px rgba(1,30,60,.035); }
 [data-testid="stExpander"] { border:1px solid var(--line); border-radius:12px; background:#fff; box-shadow:0 2px 11px rgba(1,30,60,.025); }
 [data-testid="stExpander"] summary { font-weight:750; color:#002855; }
@@ -78,7 +80,7 @@ p { line-height:1.42; }
 .packer-count { display:inline-block; border-radius:40px; padding:3px 8px; background:#e7f0fa; color:#002855; font-size:11px; font-weight:850; }
 .packer-row { color:#385069; font-size:12px; line-height:1.6; padding:4px 0; }
 .packer-row b { color:#002855; }
-.packer-empty { padding:28px 15px; background:linear-gradient(135deg,#f5f9fe,#eaf2fa); border:1px dashed #c3d5e6; border-radius:12px; text-align:center; color:#48627b; }
+.packer-empty { padding:20px 12px; background:linear-gradient(135deg,#f5f9fe,#eaf2fa); border:1px dashed #c3d5e6; border-radius:12px; text-align:center; color:#48627b; }
 .packer-empty b { display:block; font-size:14px; margin-bottom:6px; color:#002855; }
 .packer-help { font-size:11px; color:#70849a; padding-top:3px; }
 @media (max-width:820px) { .block-container { padding-top:.8rem; } .packer-hero { padding:15px 16px; } .packer-brand { font-size:22px; } .packer-app { font-size:13px; } .packer-subtitle,.packer-version { font-size:9px; } .packer-kpi-number { font-size:32px; } }
@@ -186,6 +188,14 @@ def annulla_modifica():
     st.session_state.val_h = 150
     st.session_state.val_s = False
     st.session_state.val_max_sovr = MAX_SOVR_LIVELLI_DEFAULT
+
+def svuota_tutto():
+    """Reset prima del rerun: sicuro anche con i widget gia' disegnati."""
+    st.session_state.lista_di_carico.clear()
+    st.session_state.editing_index = None
+    st.session_state.last_result = None
+    st.session_state.val_g = 'SCARICO 1'
+
 
 # --- MOTORE DI CALCOLO: PORTING DAL PLANNER 1.0 BETA 5 NON SSCC ---
 # Il Planner 1.0 beta 5 NON SSCC usa MaxRects/frontier, ordinamenti multipli,
@@ -736,24 +746,29 @@ with opt_b:
                 except Exception as e:
                     st.error(f'Errore nella lettura del file: controlla che le colonne siano corrette. Dettaglio: {e}')
 
-# 2 / Inserimento, inventario vicino al form e dashboard affiancati.
-col_form, col_result = st.columns([1, 1.25], gap='medium')
+# 2 / Tre colonne su desktop Full HD: inserimento + ottimizza, inventario, risultati.
+#    L'inventario puo' crescere, ma scorre al suo interno e NON spinge mai il pulsante.
+col_form, col_inventory, col_result = st.columns([1.12, 1.05, 1.0], gap='medium')
+
 with col_form:
     with st.container(border=True):
-        _section('01 / Merce', 'Inserimento colli', 'Aggiungi una tipologia di collo per volta, assegnandola allo scarico desiderato.')
+        _section('01 / Merce', 'Inserimento colli')
         if st.session_state.editing_index is not None:
             g,l,w,h,s,q,max_liv = _normalize_item(st.session_state.lista_di_carico[st.session_state.editing_index])
-            st.warning(f'MODIFICA IN CORSO · {g} · {q} pz · {l}×{w}×{h} cm · Sovr: {"Sì" if s else "No"}' + (f' (max {max_liv})' if s else ''))
-        st.text_input('Destinazione / scarico', key='val_g')
-        st.markdown('<div class="packer-help">Il primo scarico è il primo da consegnare: merce favorita verso il portellone.</div>', unsafe_allow_html=True)
-        st.number_input('Quantità pallet', min_value=1, key='val_q', step=1)
-        st.markdown('<div class="packer-smallhead">Dimensioni colli (cm)</div>', unsafe_allow_html=True)
-        v2,v3,v4 = st.columns(3, gap='small')
-        with v2:
+            st.warning(f'MODIFICA · {g} · {q} pz · {l}×{w}×{h} cm · Sovr: {"Sì" if s else "No"}' + (f' (max {max_liv})' if s else ''))
+        dest_col, qty_col = st.columns([1.8, 1], gap='small')
+        with dest_col:
+            st.text_input('Destinazione / scarico', key='val_g',
+                          help='SCARICO 1 è il primo da consegnare: verso il portellone.')
+        with qty_col:
+            # I soli comandi +/- sono quelli nativi di number_input.
+            st.number_input('Quantità pallet', min_value=1, key='val_q', step=1)
+        v_l,v_w,v_h = st.columns(3, gap='small')
+        with v_l:
             st.number_input('L (cm)', min_value=1, key='val_l', step=10)
-        with v3:
+        with v_w:
             st.number_input('W (cm)', min_value=1, key='val_w', step=10)
-        with v4:
+        with v_h:
             st.number_input('H (cm)', min_value=1, key='val_h', step=10)
         v_s, v_levels = st.columns([1,1], gap='small')
         with v_s:
@@ -765,59 +780,58 @@ with col_form:
         if st.session_state.editing_index is None:
             st.button('＋  AGGIUNGI COLLI', on_click=aggiungi_voce, type='primary', width='stretch')
         else:
-            b1,b2=st.columns([2,1],gap='small')
+            b1,b2 = st.columns([2,1], gap='small')
             with b1:
                 st.button('SALVA MODIFICA', on_click=aggiungi_voce, type='primary', width='stretch')
             with b2:
                 st.button('ANNULLA', on_click=annulla_modifica, width='stretch')
 
+    # Posizionare SEMPRE il pulsante prima della lista: rimane visibile anche con molti pallet.
     with st.container(border=True):
-        total_rows = len(st.session_state.lista_di_carico)
-        _section('02 / Inventario', f'Colli inseriti · {total_rows} righe',
-                 'Subito sotto l’inserimento: modifica o elimina i pallet senza scorrere a fondo pagina.')
-        if st.session_state.lista_di_carico:
-            gruppi_vista = OrderedDict()
-            for i,item in enumerate(st.session_state.lista_di_carico):
-                gruppi_vista.setdefault(item[0], []).append((i,item))
-            for idx,(g,items_gruppo) in enumerate(gruppi_vista.items()):
-                with st.expander(f'{g}   ·   {sum(_normalize_item(item)[5] for _,item in items_gruppo)} colli   ·   {len(items_gruppo)} righe', expanded=True):
-                    for i,item in items_gruppo:
-                        _,l,w,h,s,q,max_liv = _normalize_item(item)
-                        col_desc,col_edit,col_del = st.columns([6,1,1], gap='small', vertical_alignment='center')
-                        with col_desc:
-                            suffix = f'Sovr. · max {max_liv} livelli' if s else 'Non sovrapponibile'
-                            selected = ' · IN MODIFICA' if st.session_state.editing_index == i else ''
-                            st.markdown(f'<div class="packer-row"><b>{q} pz</b> · {l} × {w} × {h} cm · '
-                                        f'{html_escape(suffix)}{selected}</div>', unsafe_allow_html=True)
-                        with col_edit:
-                            st.button('✎', key=f'ed_{i}', on_click=edita_riga, args=(i,), width='stretch', help='Modifica questa riga')
-                        with col_del:
-                            st.button('×', key=f'del_{i}', on_click=elimina_riga, args=(i,), width='stretch', help='Elimina questa riga')
-            if len(st.session_state.lista_di_carico) > 11:
-                st.warning('Hai inserito molti lotti. La tabella nel PDF potrebbe essere tagliata.')
-            st.markdown('---')
-            _,clear_col = st.columns([4,1])
-            with clear_col:
-                if st.button('SVUOTA TUTTO', width='stretch'):
-                    st.session_state.lista_di_carico.clear()
-                    st.session_state.editing_index = None
-                    st.session_state.last_result = None
-                    st.session_state.val_g = 'SCARICO 1'
-                    st.rerun()
-        else:
-            st.caption('Nessun collo inserito. Usa il modulo in alto o importa un file Excel / CSV.')
-
-    with st.container(border=True):
-        _section('03 / Elaborazione', 'Ottimizzazione')
+        _section('02 / Elaborazione', 'Ottimizzazione')
         allow_rotation = st.checkbox(
             'Consenti rotazione 90° se riduce i metri lineari', value=True,
             key='allow_rotation', on_change=invalidate_result,
-            help='Motore Planner beta 5: prova orientamenti a 0° e 90° e confronta anche il risultato senza rotazione. Ricerca euristica, non ottimo matematico garantito.',
+            help='Motore Planner beta 5: confronta il risultato con e senza rotazione. Ricerca euristica.',
         )
         esegui = st.button('OTTIMIZZA PIANALE  →', type='primary', width='stretch')
-        st.caption(f'{len(st.session_state.lista_di_carico)} righe inserite · '
+        st.caption(f'{len(st.session_state.lista_di_carico)} righe · '
                    f'{sum(_normalize_item(i)[5] for i in st.session_state.lista_di_carico)} colli · '
                    f'{len(OrderedDict.fromkeys(_normalize_item(i)[0] for i in st.session_state.lista_di_carico))} scarichi')
+
+with col_inventory:
+    with st.container(border=True):
+        total_rows = len(st.session_state.lista_di_carico)
+        total_pallets = sum(_normalize_item(i)[5] for i in st.session_state.lista_di_carico)
+        _section('03 / Inventario', 'Pallet inseriti', f'{total_rows} righe · {total_pallets} colli')
+        if st.session_state.lista_di_carico:
+            # Svuota tutto resta fuori dall'area scrollabile, sempre raggiungibile.
+            st.button('SVUOTA TUTTO', on_click=svuota_tutto, width='stretch')
+            gruppi_vista = OrderedDict()
+            for i,item in enumerate(st.session_state.lista_di_carico):
+                gruppi_vista.setdefault(item[0], []).append((i,item))
+            # Altezza controllata: la lista non allunga la pagina né allontana l'azione primaria.
+            with st.container(height=400, border=False):
+                for g,items_gruppo in gruppi_vista.items():
+                    with st.expander(f'{g} · {sum(_normalize_item(item)[5] for _,item in items_gruppo)} colli', expanded=True):
+                        for i,item in items_gruppo:
+                            _,l,w,h,s,q,max_liv = _normalize_item(item)
+                            col_desc,col_edit,col_del = st.columns([5,1,1], gap='small', vertical_alignment='center')
+                            with col_desc:
+                                suffix = f'Sovr. max {max_liv}' if s else 'Non sovr.'
+                                selected = ' · IN MODIFICA' if st.session_state.editing_index == i else ''
+                                st.markdown(f'<div class="packer-row"><b>{q} pz</b> · {l} × {w} × {h} cm<br>'
+                                            f'{html_escape(suffix)}{selected}</div>', unsafe_allow_html=True)
+                            with col_edit:
+                                st.button('✎', key=f'ed_{i}', on_click=edita_riga, args=(i,), width='stretch', help='Modifica')
+                            with col_del:
+                                st.button('×', key=f'del_{i}', on_click=elimina_riga, args=(i,), width='stretch', help='Elimina')
+            if total_rows > 11:
+                st.caption('Molti lotti: la tabella nel PDF potrebbe essere tagliata.')
+        else:
+            st.markdown('<div class="packer-empty"><b>Ancora nessun collo</b>'
+                        'Inserisci la merce nel modulo a sinistra oppure importa Excel / CSV.'
+                        '</div>', unsafe_allow_html=True)
 
 # Calcolo invariato rispetto alla beta 5 (compreso confronto rotazione).
 if esegui and st.session_state.lista_di_carico:
